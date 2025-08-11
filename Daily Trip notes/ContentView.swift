@@ -10,10 +10,14 @@ import SwiftUI
 struct ContentView: View {
     var body: some View {
         VStack {
-            Image(systemName: "globe")
+            Image(systemName: "airplane")
                 .imageScale(.large)
                 .foregroundStyle(.tint)
-            Text("Hello, world!")
+            Text("Daily Trip Notes")
+                .font(.title)
+            Text("Navigate to TripListView for the main app")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
         .padding()
     }

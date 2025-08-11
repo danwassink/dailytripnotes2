@@ -9,9 +9,12 @@ import SwiftUI
 
 @main
 struct Daily_Trip_notesApp: App {
+    let coreDataManager = CoreDataManager.shared
+    
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            TripListView()
+                .environment(\.managedObjectContext, coreDataManager.container.viewContext)
         }
     }
 }

@@ -15,44 +15,34 @@ struct TripDetailView: View {
         List {
             Section("Trip Info") {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(trip.name ?? "Untitled Trip")
-                                .font(.title2)
-                                .fontWeight(.bold)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(trip.name ?? "Untitled Trip")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        
+                        if let startDate = trip.startDate, let endDate = trip.endDate {
+                            Text("\(startDate.formatted(date: .abbreviated, time: .omitted)) - \(endDate.formatted(date: .abbreviated, time: .omitted))")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
                             
-                            if let startDate = trip.startDate, let endDate = trip.endDate {
-                                Text("\(startDate.formatted(date: .abbreviated, time: .omitted)) - \(endDate.formatted(date: .abbreviated, time: .omitted))")
-                                    .font(.subheadline)
+                            // Add day of week information
+                            HStack(spacing: 16) {
+                                Text(startDate.formatted(.dateTime.weekday(.abbreviated)))
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                                Text("to")
+                                    .font(.caption)
                                     .foregroundColor(.secondary)
-                                
-                                // Add day of week information
-                                HStack(spacing: 16) {
-                                    Text(startDate.formatted(.dateTime.weekday(.abbreviated)))
-                                        .font(.caption)
-                                        .foregroundColor(.blue)
-                                    Text("to")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Text(endDate.formatted(.dateTime.weekday(.abbreviated)))
-                                        .font(.caption)
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                            
-                            if let desc = trip.desc, !desc.isEmpty {
-                                Text(desc)
-                                    .font(.body)
-                                    .foregroundColor(.secondary)
+                                Text(endDate.formatted(.dateTime.weekday(.abbreviated)))
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
                             }
                         }
                         
-                        Spacer()
-                        
-                        Button(action: { showingEditTrip = true }) {
-                            Image(systemName: "pencil.circle.fill")
-                                .foregroundColor(.blue)
-                                .font(.title2)
+                        if let desc = trip.desc, !desc.isEmpty {
+                            Text(desc)
+                                .font(.body)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }
@@ -84,6 +74,13 @@ struct TripDetailView: View {
         }
         .navigationTitle("Trip Details")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Edit") {
+                    showingEditTrip = true
+                }
+            }
+        }
         .sheet(isPresented: $showingAddDay) {
             AddDayView(trip: trip)
         }

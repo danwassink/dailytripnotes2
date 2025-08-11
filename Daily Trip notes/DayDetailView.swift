@@ -9,26 +9,36 @@ struct DayDetailView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Header with date
-            VStack(spacing: 8) {
+            // Header with date - redesigned without gray background
+            VStack(spacing: 12) {
                 if let date = tripDay.date {
-                    Text(date.formatted(date: .complete, time: .omitted))
+                    // Main date in large, prominent text (without day to avoid duplication)
+                    Text(date.formatted(.dateTime.month(.wide).day().year()))
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                        .multilineTextAlignment(.center)
+                    
+                    // Day of week in blue, medium size
+                    Text(date.formatted(.dateTime.weekday(.wide)))
                         .font(.title2)
+                        .foregroundColor(.blue)
                         .fontWeight(.semibold)
                     
-                    // Add day of week prominently
-                    Text(date.formatted(.dateTime.weekday(.wide)))
-                        .font(.title3)
-                        .foregroundColor(.blue)
-                        .fontWeight(.medium)
+                    // Day number with subtle styling
+                    Text("Day \(tripDay.order + 1)")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(.systemGray6))
+                        )
                 }
-                
-                Text("Day \(tripDay.order + 1)")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
             }
-            .padding()
-            .background(Color(.systemGroupedBackground))
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 24)
             
             // Journal entry editor
             VStack(alignment: .leading, spacing: 16) {
@@ -36,7 +46,7 @@ struct DayDetailView: View {
                     Text("Journal Entry")
                         .font(.headline)
                     Spacer()
-                    Button(isEditing ? "Done" : "Edit") {
+                    Button(isEditing ? "Done" : (journalContent.isEmpty ? "Add" : "Edit")) {
                         if isEditing {
                             saveJournalEntry()
                         }
@@ -44,34 +54,37 @@ struct DayDetailView: View {
                     }
                     .foregroundColor(.blue)
                 }
+                .padding(.horizontal, 20)
                 
                 if isEditing {
                     TextEditor(text: $journalContent)
                         .frame(minHeight: 200)
-                        .padding(8)
+                        .padding(12)
                         .background(Color(.systemBackground))
-                        .cornerRadius(8)
+                        .cornerRadius(12)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 8)
+                            RoundedRectangle(cornerRadius: 12)
                                 .stroke(Color(.separator), lineWidth: 1)
                         )
+                        .padding(.horizontal, 20)
                 } else {
                     ScrollView {
                         if journalContent.isEmpty {
-                            Text("No journal entry yet. Tap Edit to write about your day.")
+                            Text("No journal entry yet. Tap Add to write about your day.")
                                 .foregroundColor(.secondary)
                                 .italic()
-                                .padding()
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 40)
                         } else {
                             Text(journalContent)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding()
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 16)
                         }
                     }
                     .frame(maxHeight: .infinity)
                 }
             }
-            .padding()
             
             Spacer()
         }

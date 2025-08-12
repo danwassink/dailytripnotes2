@@ -13,10 +13,10 @@ struct DayDetailView: View {
     @State private var showingPhotoPicker = false
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var photosAdded = false
-    @State private var isEditing = false
     @State private var photosDeleted = false
     @State private var isProcessing = false
     @State private var showingCustomPhotoPicker = false
+    @State private var showingJournalEditor = false
     
     var sortedPhotos: [Photo] {
         let photos = tripDay.photos?.allObjects as? [Photo] ?? []
@@ -118,56 +118,45 @@ struct DayDetailView: View {
             }
             .id("\(photosAdded)-\(photosDeleted)") // Force refresh when photos are added or deleted
             
-            // Journal entry editor
+            // Journal entry section
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text("Journal Entry")
                         .font(.headline)
                     Spacer()
-                    Button(isEditing ? "Done" : (journalContent.isEmpty ? "Add" : "Edit")) {
-                        if isEditing {
-                            saveJournalEntry()
-                        }
-                        isEditing.toggle()
+                    Button(journalContent.isEmpty ? "Add" : "Edit") {
+                        showingJournalEditor = true
                     }
                     .foregroundColor(.blue)
                 }
                 .padding(.horizontal, 20)
                 
-                if isEditing {
-                    TextEditor(text: $journalContent)
-                        .frame(minHeight: 200)
-                        .padding(12)
-                        .background(Color(.systemBackground))
-                        .cornerRadius(12)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color(.separator), lineWidth: 1)
-                        )
-                        .padding(.horizontal, 20)
-                } else {
-                    ScrollView {
-                        if journalContent.isEmpty {
-                            Text("No journal entry yet. Tap Add to write about your day.")
-                                .foregroundColor(.secondary)
-                                .italic()
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 40)
-                        } else {
-                            Text(journalContent)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 16)
-                        }
+                ScrollView {
+                    if journalContent.isEmpty {
+                        Text("No journal entry yet. Tap Add to write about your day.")
+                            .foregroundColor(.secondary)
+                            .italic()
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 40)
+                    } else {
+                        Text(journalContent)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 16)
                     }
-                    .frame(maxHeight: .infinity)
                 }
+                .frame(maxHeight: .infinity)
             }
             
             Spacer()
         }
         .navigationTitle("Day Details")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingJournalEditor) {
+            JournalEntryView(tripDay: tripDay) {
+                loadJournalContent() // Refresh the content when journal is saved
+            }
+        }
         .onAppear {
             loadJournalContent()
         }
@@ -182,24 +171,7 @@ struct DayDetailView: View {
         }
     }
     
-    private func saveJournalEntry() {
-        var journalEntry = tripDay.journalEntry
-        
-        if journalEntry == nil {
-            journalEntry = JournalEntry(context: viewContext)
-            journalEntry?.id = UUID()
-            journalEntry?.createdDate = Date()
-            journalEntry?.tripDay = tripDay
-        }
-        
-        journalEntry?.content = journalContent
-        
-        do {
-            try viewContext.save()
-        } catch {
-            print("Error saving journal entry: \(error)")
-        }
-    }
+
     
     private func processSelectedPhotos(_ photos: [PhotosPickerItem]) {
         print("DayDetailView: Processing \(photos.count) selected photos")

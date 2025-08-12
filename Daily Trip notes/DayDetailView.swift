@@ -567,6 +567,12 @@ struct CustomPhotoPickerView: View {
             checkAlreadyAddedPhotos()
             print("CustomPhotoPickerView: onAppear - tripDay has \(tripDay.photos?.count ?? 0) photos")
         }
+        .onChange(of: photos) { _ in
+            // Remove any already added photos from selection when photos change
+            selectedPhotos.removeAll { asset in
+                isPhotoAlreadyAdded(asset)
+            }
+        }
     }
     
     private func checkAlreadyAddedPhotos() {
@@ -748,30 +754,29 @@ struct PhotoAssetView: View {
                     )
             }
             
-            // Selection indicator
-            if isSelected {
-                VStack {
-                    HStack {
-                        Spacer()
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.white)
-                            .background(Color.blue)
-                            .clipShape(Circle())
-                            .font(.title2)
-                    }
-                    Spacer()
-                }
-                .padding(4)
-            }
-            
-            // Already added indicator
+            // Checkmark indicators - prioritize disabled state over selection
             if isDisabled {
+                // Already added indicator (green checkmark)
                 VStack {
                     HStack {
                         Spacer()
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.white)
                             .background(Color.green)
+                            .clipShape(Circle())
+                            .font(.title2)
+                    }
+                    Spacer()
+                }
+                .padding(4)
+            } else if isSelected {
+                // Selection indicator (blue checkmark) - only show if not disabled
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.white)
+                            .background(Color.blue)
                             .clipShape(Circle())
                             .font(.title2)
                     }

@@ -588,7 +588,7 @@ struct CustomPhotoPickerView: View {
         print("CustomPhotoPickerView: TripDay has \(tripDay.photos?.count ?? 0) photos")
         
         // Strategy: Compare creation dates with tolerance
-        let tolerance: TimeInterval = 1.0 // 1 second tolerance for exact matches
+        let tolerance: TimeInterval = 300.0 // 5 minutes tolerance to account for time zone differences
         
         for (index, photo) in (tripDay.photos ?? []).enumerated() {
             guard let coreDataPhoto = photo as? Photo else { 

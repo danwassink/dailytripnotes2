@@ -702,21 +702,7 @@ struct TripMapView: View {
     var body: some View {
         Map(coordinateRegion: $region, annotationItems: photoAnnotations) { annotation in
             MapAnnotation(coordinate: annotation.coordinate) {
-                VStack(spacing: 0) {
-                    Image(systemName: "photo.circle.fill")
-                        .font(.title)
-                        .foregroundColor(.blue)
-                        .background(Color.white)
-                        .clipShape(Circle())
-                    
-                    Text(annotation.title)
-                        .font(.caption)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.white)
-                        .foregroundColor(.black)
-                        .cornerRadius(8)
-                }
+                PhotoAnnotationView(annotation: annotation)
             }
         }
         .onAppear {
@@ -770,6 +756,123 @@ struct TripMapView: View {
                     longitudeDelta: (maxLon - minLon) * 1.5
                 )
             )
+        }
+    }
+}
+
+struct PhotoAnnotationView: View {
+    let annotation: PhotoAnnotation
+    @State private var image: UIImage?
+    @State private var isLoading = true
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            // Photo thumbnail
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 60, height: 60)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.white, lineWidth: 2)
+                    )
+                    .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+            } else if isLoading {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray5))
+                    .frame(width: 60, height: 60)
+                    .overlay(
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    )
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray4))
+                    .frame(width: 60, height: 60)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.secondary)
+                    )
+            }
+            
+            // Date label
+            Text(annotation.title)
+                .font(.caption2)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.white)
+                .foregroundColor(.black)
+                .cornerRadius(6)
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
+        }
+        .onAppear {
+            loadPhotoThumbnail()
+        }
+    }
+    
+    private func loadPhotoThumbnail() {
+        guard let filename = annotation.photo.filename else { return }
+        
+        // Check if this is a temporary photo from PHAsset
+        if filename.hasPrefix("temp_") || filename.contains(":") {
+            loadPhotoFromPHAsset(filename)
+        } else {
+            loadPhotoFromDocuments(filename)
+        }
+    }
+    
+    private func loadPhotoFromDocuments(_ filename: String) {
+        if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let photoURL = documentsPath.appendingPathComponent(filename)
+            if let imageData = try? Data(contentsOf: photoURL),
+               let loadedImage = UIImage(data: imageData) {
+                DispatchQueue.main.async {
+                    self.image = loadedImage
+                    self.isLoading = false
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+    
+    private func loadPhotoFromPHAsset(_ filename: String) {
+        // Extract the actual PHAsset localIdentifier
+        let assetIdentifier = filename.hasPrefix("temp_") ? String(filename.dropFirst(5)) : filename
+        
+        // Fetch the PHAsset
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+        guard let asset = fetchResult.firstObject else { 
+            DispatchQueue.main.async {
+                self.isLoading = false
+            }
+            return 
+        }
+        
+        // Load the thumbnail
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.isNetworkAccessAllowed = true
+        options.resizeMode = .fast
+        
+        let targetSize = CGSize(width: 120, height: 120) // 2x for retina
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: .aspectFill,
+            options: options
+        ) { image, info in
+            DispatchQueue.main.async {
+                if let image = image {
+                    self.image = image
+                }
+                self.isLoading = false
+            }
         }
     }
 }

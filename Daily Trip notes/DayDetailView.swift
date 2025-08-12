@@ -613,8 +613,8 @@ struct CustomPhotoPickerView: View {
                 if let photoDate = coreDataPhoto.photoDate {
                     let timeDifference = abs(photoDate.timeIntervalSince(creationDate))
                     print("  - photoDate difference: \(timeDifference)s")
-                    // Use 5-second tolerance for UTC dates (should be exact)
-                    if timeDifference <= 5.0 {
+                    // Use 4-hour tolerance to account for system clock differences
+                    if timeDifference <= 14400.0 { // 4 hours = 14400 seconds
                         print("CustomPhotoPickerView: ✅ Duplicate detected by photoDate - difference: \(timeDifference)s")
                         return true
                     }

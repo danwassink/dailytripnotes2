@@ -562,6 +562,7 @@ struct CustomPhotoPickerView: View {
         .onAppear {
             loadPhotosFromDate()
             checkAlreadyAddedPhotos()
+            print("CustomPhotoPickerView: onAppear - tripDay has \(tripDay.photos?.count ?? 0) photos")
         }
     }
     
@@ -576,21 +577,48 @@ struct CustomPhotoPickerView: View {
     }
     
     private func isPhotoAlreadyAdded(_ asset: PHAsset) -> Bool {
-        // Check if this photo is already added by comparing creation date and other metadata
-        // Since we can't directly compare PHAsset to Core Data Photo, we'll use a heuristic approach
-        
+        // Check if this photo is already added using multiple strategies
         guard let creationDate = asset.creationDate else { return false }
         
-        // Check if any photo in the trip day has the same creation date (within a small tolerance)
-        let tolerance: TimeInterval = 1.0 // 1 second tolerance
+        // Strategy 1: Compare creation dates with tolerance
+        let tolerance: TimeInterval = 2.0 // Increased tolerance to 2 seconds
         
         for photo in tripDay.photos ?? [] {
             guard let coreDataPhoto = photo as? Photo else { continue }
             
-            // If the photo has a photoDate, compare it
+            // Check photoDate if available
             if let photoDate = coreDataPhoto.photoDate {
                 let timeDifference = abs(photoDate.timeIntervalSince(creationDate))
                 if timeDifference <= tolerance {
+                    print("CustomPhotoPickerView: Duplicate detected by photoDate - difference: \(timeDifference)s")
+                    return true
+                }
+            }
+            
+            // Strategy 2: Check createdDate if available
+            if let createdDate = coreDataPhoto.createdDate {
+                let timeDifference = abs(createdDate.timeIntervalSince(creationDate))
+                if timeDifference <= tolerance {
+                    print("CustomPhotoPickerView: Duplicate detected by createdDate - difference: \(timeDifference)s")
+                    return true
+                }
+            }
+        }
+        
+        // Strategy 3: Check if we have multiple photos with very similar timestamps
+        // This catches cases where the same photo might have slightly different timestamps
+        let similarPhotos = (tripDay.photos ?? []).compactMap { photo -> Date? in
+            guard let coreDataPhoto = photo as? Photo else { return nil }
+            return coreDataPhoto.photoDate ?? coreDataPhoto.createdDate
+        }
+        
+        // If we have multiple photos from the same time period, be more strict
+        if similarPhotos.count > 1 {
+            let extendedTolerance: TimeInterval = 5.0 // 5 seconds for multiple photos
+            for photoDate in similarPhotos {
+                let timeDifference = abs(photoDate.timeIntervalSince(creationDate))
+                if timeDifference <= extendedTolerance {
+                    print("CustomPhotoPickerView: Duplicate detected by extended tolerance - difference: \(timeDifference)s")
                     return true
                 }
             }
@@ -642,6 +670,13 @@ struct CustomPhotoPickerView: View {
         DispatchQueue.main.async {
             self.photos = tempPhotos
             self.isLoading = false
+            print("CustomPhotoPickerView: Loaded \(tempPhotos.count) photos from date")
+            
+            // Debug: Check each photo for duplicate status
+            for (index, asset) in tempPhotos.enumerated() {
+                let isDuplicate = self.isPhotoAlreadyAdded(asset)
+                print("CustomPhotoPickerView: Photo \(index): creationDate=\(asset.creationDate?.description ?? "nil"), isDuplicate=\(isDuplicate)")
+            }
         }
     }
     

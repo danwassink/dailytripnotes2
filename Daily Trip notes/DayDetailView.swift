@@ -657,20 +657,29 @@ struct CustomPhotoPickerView: View {
         
         var tempPhotos: [PHAsset] = []
         
-        // Add images first
+        // Add images first, but filter out potentially problematic ones
         imageFetchResult.enumerateObjects { asset, _, _ in
-            tempPhotos.append(asset)
+            // Only add assets that have valid creation dates and are accessible
+            if asset.creationDate != nil && asset.mediaType == .image {
+                tempPhotos.append(asset)
+            } else {
+                print("CustomPhotoPickerView: Skipping image asset - creationDate: \(asset.creationDate?.description ?? "nil"), mediaType: \(asset.mediaType.rawValue)")
+            }
         }
         
         // Add videos
         videoFetchResult.enumerateObjects { asset, _, _ in
-            tempPhotos.append(asset)
+            if asset.creationDate != nil && asset.mediaType == .video {
+                tempPhotos.append(asset)
+            } else {
+                print("CustomPhotoPickerView: Skipping video asset - creationDate: \(asset.creationDate?.description ?? "nil"), mediaType: \(asset.mediaType.rawValue)")
+            }
         }
         
         DispatchQueue.main.async {
             self.photos = tempPhotos
             self.isLoading = false
-            print("CustomPhotoPickerView: Loaded \(tempPhotos.count) photos from date")
+            print("CustomPhotoPickerView: Loaded \(tempPhotos.count) valid photos from date")
             
             // Debug: Check each photo for duplicate status
             for (index, asset) in tempPhotos.enumerated() {
@@ -695,6 +704,8 @@ struct PhotoAssetView: View {
     let onTap: () -> Void
     
     @State private var image: UIImage?
+    @State private var isLoading = true
+    @State private var hasError = false
     
     var body: some View {
         ZStack {
@@ -710,7 +721,23 @@ struct PhotoAssetView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(isDisabled ? Color.black.opacity(0.4) : Color.clear)
                     )
+            } else if hasError {
+                // Show error state
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemRed).opacity(0.3))
+                    .frame(width: 100, height: 100)
+                    .overlay(
+                        VStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundColor(.red)
+                                .font(.caption)
+                            Text("Error")
+                                .font(.caption2)
+                                .foregroundColor(.red)
+                        }
+                    )
             } else {
+                // Show loading state
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(.systemGray5))
                     .frame(width: 100, height: 100)
@@ -765,9 +792,9 @@ struct PhotoAssetView: View {
     
     private func loadThumbnail() async {
         let options = PHImageRequestOptions()
-        options.deliveryMode = .fastFormat
-        options.isNetworkAccessAllowed = false
-        options.resizeMode = .exact
+        options.deliveryMode = .opportunistic
+        options.isNetworkAccessAllowed = true
+        options.resizeMode = .fast
         
         // Try to load a smaller thumbnail first
         let targetSize = CGSize(width: 100, height: 100)
@@ -781,9 +808,18 @@ struct PhotoAssetView: View {
             DispatchQueue.main.async {
                 if let image = image {
                     self.image = image
+                    self.isLoading = false
+                    self.hasError = false
                 } else {
-                    // If thumbnail fails, try to get the full image
-                    self.loadFullImage()
+                    // Check if there's an error
+                    if let error = info?[PHImageErrorKey] as? Error {
+                        print("PhotoAssetView: Thumbnail loading error: \(error.localizedDescription)")
+                        self.hasError = true
+                        self.isLoading = false
+                    } else {
+                        // If thumbnail fails, try to get the full image
+                        self.loadFullImage()
+                    }
                 }
             }
         }
@@ -792,7 +828,7 @@ struct PhotoAssetView: View {
     private func loadFullImage() {
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
-        options.isNetworkAccessAllowed = false
+        options.isNetworkAccessAllowed = true
         options.isSynchronous = false
         
         PHImageManager.default().requestImage(
@@ -811,9 +847,20 @@ struct PhotoAssetView: View {
                     UIGraphicsEndImageContext()
                     
                     self.image = thumbnail
+                    self.isLoading = false
+                    self.hasError = false
                 } else {
-                    // If all else fails, show a placeholder
-                    print("Failed to load image for asset: \(self.asset.localIdentifier)")
+                    // Check if there's an error
+                    if let error = info?[PHImageErrorKey] as? Error {
+                        print("PhotoAssetView: Full image loading error: \(error.localizedDescription)")
+                        self.hasError = true
+                        self.isLoading = false
+                    } else {
+                        // If all else fails, show error state
+                        print("PhotoAssetView: Failed to load image for asset: \(self.asset.localIdentifier)")
+                        self.hasError = true
+                        self.isLoading = false
+                    }
                 }
             }
         }

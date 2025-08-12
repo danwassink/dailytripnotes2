@@ -1,6 +1,8 @@
 import SwiftUI
 import PhotosUI
 import CoreData
+import ImageIO
+import Photos
 
 struct DayDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
@@ -13,10 +15,39 @@ struct DayDetailView: View {
     @State private var photosAdded = false
     @State private var isEditing = false
     @State private var photosDeleted = false
+    @State private var isProcessing = false
+    @State private var showingCustomPhotoPicker = false
     
     var sortedPhotos: [Photo] {
         let photos = tripDay.photos?.allObjects as? [Photo] ?? []
-        return photos.sorted { $0.order < $1.order }
+        
+        // Debug logging
+        print("DayDetailView: Trip day date: \(tripDay.date ?? Date())")
+        print("DayDetailView: Total photos found: \(photos.count)")
+        
+        // Debug: Show details of each photo
+        for (index, photo) in photos.enumerated() {
+            print("DayDetailView: Photo \(index): id=\(photo.id?.uuidString ?? "nil"), photoDate=\(photo.photoDate ?? Date()), createdDate=\(photo.createdDate ?? Date()), tripDay=\(photo.tripDay?.date ?? Date())")
+        }
+        
+        // Filter photos to only show those taken on this specific day
+        let dayStart = Calendar.current.startOfDay(for: tripDay.date ?? Date())
+        let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        
+        print("DayDetailView: Day start: \(dayStart)")
+        print("DayDetailView: Day end: \(dayEnd)")
+        
+        let filteredPhotos = photos.filter { photo in
+            let photoDate = photo.photoDate ?? photo.createdDate ?? Date()
+            
+            let isInDay = photoDate >= dayStart && photoDate < dayEnd
+            print("DayDetailView: Photo date: \(photoDate), isInDay: \(isInDay)")
+            return isInDay
+        }
+        
+        print("DayDetailView: Filtered photos count: \(filteredPhotos.count)")
+        
+        return filteredPhotos.sorted { $0.order < $1.order }
     }
     
     var body: some View {
@@ -61,12 +92,10 @@ struct DayDetailView: View {
                         })
                     }
                     
-                    // Add Photos Button - Direct PhotosPicker
-                    PhotosPicker(
-                        selection: $selectedPhotos,
-                        maxSelectionCount: 50,
-                        matching: .images
-                    ) {
+                    // Add Photos Button - Custom Date-Filtered Picker
+                    Button(action: {
+                        showingCustomPhotoPicker = true
+                    }) {
                         VStack(spacing: 8) {
                             Image(systemName: "plus.circle.fill")
                                 .font(.system(size: 30))
@@ -79,15 +108,15 @@ struct DayDetailView: View {
                         .background(Color(.systemGray6))
                         .cornerRadius(8)
                     }
-                    .onChange(of: selectedPhotos) { _, newPhotos in
-                        if !newPhotos.isEmpty {
-                            processSelectedPhotos(newPhotos)
-                        }
+                    .sheet(isPresented: $showingCustomPhotoPicker) {
+                        CustomPhotoPickerView(tripDay: tripDay, onPhotosSelected: { selectedAssets in
+                            processSelectedPHAssets(selectedAssets)
+                        })
                     }
                 }
                 .padding(.vertical, 8)
             }
-            .id(photosAdded, photosDeleted) // Force refresh when photos are added or deleted
+            .id("\(photosAdded)-\(photosDeleted)") // Force refresh when photos are added or deleted
             
             // Journal entry editor
             VStack(alignment: .leading, spacing: 16) {
@@ -173,18 +202,67 @@ struct DayDetailView: View {
     }
     
     private func processSelectedPhotos(_ photos: [PhotosPickerItem]) {
+        print("DayDetailView: Processing \(photos.count) selected photos")
+        isProcessing = true
+        
         Task {
             for (index, photoItem) in photos.enumerated() {
+                print("DayDetailView: Processing photo \(index + 1) of \(photos.count)")
                 if let data = try? await photoItem.loadTransferable(type: Data.self) {
+                    print("DayDetailView: Successfully loaded photo data, size: \(data.count) bytes")
                     await MainActor.run {
                         savePhoto(data: data, order: index)
                     }
+                } else {
+                    print("DayDetailView: Failed to load photo data for photo \(index + 1)")
                 }
             }
             
             await MainActor.run {
+                isProcessing = false
                 photosAdded.toggle() // Force view refresh
                 selectedPhotos.removeAll() // Clear selection
+                print("DayDetailView: Finished processing photos, photosAdded toggled to: \(photosAdded)")
+            }
+        }
+    }
+    
+    private func processSelectedPHAssets(_ assets: [PHAsset]) {
+        print("DayDetailView: Processing \(assets.count) selected PHAssets")
+        isProcessing = true
+        
+        Task {
+            for (index, asset) in assets.enumerated() {
+                print("DayDetailView: Processing PHAsset \(index + 1) of \(assets.count)")
+                
+                let data = await loadImageDataFromAsset(asset)
+                if let data = data {
+                    print("DayDetailView: Successfully loaded PHAsset data, size: \(data.count) bytes")
+                    await MainActor.run {
+                        savePhoto(data: data, order: index)
+                    }
+                } else {
+                    print("DayDetailView: Failed to load PHAsset data for asset \(index + 1)")
+                }
+            }
+            
+            await MainActor.run {
+                isProcessing = false
+                photosAdded.toggle() // Force view refresh
+                print("DayDetailView: Finished processing PHAssets, photosAdded toggled to: \(photosAdded)")
+            }
+        }
+    }
+    
+    private func loadImageDataFromAsset(_ asset: PHAsset) async -> Data? {
+        return await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = false
+            options.isSynchronous = false
+            
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
+                continuation.resume(returning: data)
             }
         }
     }
@@ -195,7 +273,34 @@ struct DayDetailView: View {
         photo.filename = "photo_\(UUID().uuidString).jpg"
         photo.caption = ""
         photo.createdDate = Date()
-        photo.photoDate = Date()
+        
+        print("DayDetailView: Saving photo with createdDate: \(photo.createdDate ?? Date())")
+        
+        // Try to extract the actual photo date from the image data
+        if let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [String: Any],
+           let exif = properties["{Exif}"] as? [String: Any],
+           let dateString = exif["DateTimeOriginal"] as? String {
+            
+            print("DayDetailView: Found EXIF date: \(dateString)")
+            
+            // Parse the EXIF date (format: "2024:01:15 14:30:25")
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+            if let photoDate = formatter.date(from: dateString) {
+                photo.photoDate = photoDate
+                print("DayDetailView: Set photoDate from EXIF: \(photoDate)")
+            } else {
+                // Use trip day date instead of current date
+                photo.photoDate = tripDay.date ?? Date()
+                print("DayDetailView: Failed to parse EXIF date, using trip day date: \(tripDay.date ?? Date())")
+            }
+        } else {
+            // If no EXIF data, use trip day date instead of current date
+            photo.photoDate = tripDay.date ?? Date()
+            print("DayDetailView: No EXIF data found, using trip day date: \(tripDay.date ?? Date())")
+        }
+        
         photo.order = Int32(order)
         photo.tripDay = tripDay
         
@@ -207,6 +312,16 @@ struct DayDetailView: View {
         
         // Save to Core Data
         try? viewContext.save()
+        
+        print("DayDetailView: Photo saved successfully")
+        
+        // Debug: Check if the photo is properly associated
+        print("DayDetailView: Photo tripDay: \(photo.tripDay?.date ?? Date())")
+        print("DayDetailView: Photo tripDay ID: \(photo.tripDay?.id?.uuidString ?? "nil")")
+        
+        // Debug: Check the current trip day's photos count
+        let currentPhotos = tripDay.photos?.allObjects as? [Photo] ?? []
+        print("DayDetailView: Current trip day has \(currentPhotos.count) photos after saving")
     }
 }
 
@@ -298,6 +413,229 @@ struct PhotoThumbnailView: View {
         // Save changes
         try? viewContext.save()
         onPhotoDeleted() // Notify parent view
+    }
+}
+
+struct CustomPhotoPickerView: View {
+    let tripDay: TripDay
+    let onPhotosSelected: ([PHAsset]) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    @State private var photos: [PHAsset] = []
+    @State private var selectedPhotos: [PHAsset] = []
+    @State private var isLoading = true
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                if isLoading {
+                    ProgressView("Loading photos from \(formatDate(tripDay.date))...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if photos.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 60))
+                            .foregroundColor(.secondary)
+                        
+                        Text("No Photos Found")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                        
+                        Text("No photos were taken on \(formatDate(tripDay.date))")
+                            .font(.body)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
+                            ForEach(photos, id: \.localIdentifier) { asset in
+                                PhotoAssetView(asset: asset, isSelected: selectedPhotos.contains(asset)) {
+                                    if selectedPhotos.contains(asset) {
+                                        selectedPhotos.removeAll { $0.localIdentifier == asset.localIdentifier }
+                                    } else {
+                                        selectedPhotos.append(asset)
+                                    }
+                                }
+                            }
+                        }
+                        .padding()
+                    }
+                }
+            }
+            .navigationTitle("Photos from \(formatDate(tripDay.date))")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Add \(selectedPhotos.count) Photos") {
+                        onPhotosSelected(selectedPhotos)
+                        dismiss()
+                    }
+                    .disabled(selectedPhotos.isEmpty)
+                }
+            }
+        }
+        .onAppear {
+            loadPhotosFromDate()
+        }
+    }
+    
+    private func loadPhotosFromDate() {
+        guard let tripDate = tripDay.date else { return }
+        
+        // Check photo library permission first
+        let status = PHPhotoLibrary.authorizationStatus()
+        guard status == .authorized || status == .limited else {
+            print("CustomPhotoPickerView: Photo library permission not granted: \(status.rawValue)")
+            DispatchQueue.main.async {
+                self.isLoading = false
+            }
+            return
+        }
+        
+        let dayStart = Calendar.current.startOfDay(for: tripDate)
+        let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        
+        print("CustomPhotoPickerView: Fetching photos from \(dayStart) to \(dayEnd)")
+        
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@", dayStart as NSDate, dayEnd as NSDate)
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        
+        let fetchResult = PHAsset.fetchAssets(with: .image, options: options)
+        
+        print("CustomPhotoPickerView: Found \(fetchResult.count) photos for this date")
+        
+        var tempPhotos: [PHAsset] = []
+        fetchResult.enumerateObjects { asset, _, _ in
+            tempPhotos.append(asset)
+        }
+        
+        DispatchQueue.main.async {
+            self.photos = tempPhotos
+            self.isLoading = false
+        }
+    }
+    
+    private func formatDate(_ date: Date?) -> String {
+        guard let date = date else { return "Unknown Date" }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter.string(from: date)
+    }
+}
+
+struct PhotoAssetView: View {
+    let asset: PHAsset
+    let isSelected: Bool
+    let onTap: () -> Void
+    
+    @State private var image: UIImage?
+    
+    var body: some View {
+        ZStack {
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 100, height: 100)
+                    .clipped()
+                    .cornerRadius(8)
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray5))
+                    .frame(width: 100, height: 100)
+                    .overlay(
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    )
+            }
+            
+            // Selection indicator
+            if isSelected {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.white)
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                            .font(.title2)
+                    }
+                    Spacer()
+                }
+                .padding(4)
+            }
+        }
+        .onTapGesture {
+            onTap()
+        }
+        .task {
+            await loadThumbnail()
+        }
+    }
+    
+    private func loadThumbnail() async {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .fastFormat
+        options.isNetworkAccessAllowed = false
+        options.resizeMode = .exact
+        
+        // Try to load a smaller thumbnail first
+        let targetSize = CGSize(width: 100, height: 100)
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: .aspectFill,
+            options: options
+        ) { image, info in
+            DispatchQueue.main.async {
+                if let image = image {
+                    self.image = image
+                } else {
+                    // If thumbnail fails, try to get the full image
+                    self.loadFullImage()
+                }
+            }
+        }
+    }
+    
+    private func loadFullImage() {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = false
+        options.isSynchronous = false
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: PHImageManagerMaximumSize,
+            contentMode: .aspectFit,
+            options: options
+        ) { image, info in
+            DispatchQueue.main.async {
+                if let image = image {
+                    // Scale down the full image to thumbnail size
+                    let thumbnailSize = CGSize(width: 100, height: 100)
+                    UIGraphicsBeginImageContextWithOptions(thumbnailSize, false, 0.0)
+                    image.draw(in: CGRect(origin: .zero, size: thumbnailSize))
+                    let thumbnail = UIGraphicsGetImageFromCurrentImageContext()
+                    UIGraphicsEndImageContext()
+                    
+                    self.image = thumbnail
+                } else {
+                    // If all else fails, show a placeholder
+                    print("Failed to load image for asset: \(self.asset.localIdentifier)")
+                }
+            }
+        }
     }
 }
 

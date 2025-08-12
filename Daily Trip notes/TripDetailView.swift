@@ -6,6 +6,7 @@ struct TripDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @State private var showingAddDay = false
     @State private var showingEditTrip = false
+    @State private var refreshTrigger = false
     
     var sortedDays: [TripDay] {
         trip.tripDays?.allObjects as? [TripDay] ?? []
@@ -62,14 +63,6 @@ struct TripDetailView: View {
                     }
                     .onDelete(perform: deleteDays)
                 }
-                
-                Button(action: { showingAddDay = true }) {
-                    HStack {
-                        Image(systemName: "plus.circle.fill")
-                        Text("Add Day")
-                    }
-                    .foregroundColor(.blue)
-                }
             }
         }
         .navigationTitle("Trip Details")
@@ -87,9 +80,22 @@ struct TripDetailView: View {
         .sheet(isPresented: $showingEditTrip) {
             EditTripView(trip: trip)
         }
+        .onChange(of: showingEditTrip) { _, isShowing in
+            if !isShowing {
+                // Sheet was dismissed, trigger refresh
+                refreshTrigger.toggle()
+            }
+        }
+        .onChange(of: showingAddDay) { _, isShowing in
+            if !isShowing {
+                // Add day sheet was dismissed, trigger refresh
+                refreshTrigger.toggle()
+            }
+        }
         .onAppear {
             generateDaysIfNeeded()
         }
+        .id(refreshTrigger) // Force refresh when editing sheet is dismissed
     }
     
     private func deleteDays(offsets: IndexSet) {

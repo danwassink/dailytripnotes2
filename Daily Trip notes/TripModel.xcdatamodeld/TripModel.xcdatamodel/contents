@@ -7,6 +7,7 @@
         <relationship name="tripDay" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="TripDay" inverseName="journalEntry" inverseEntity="TripDay"/>
     </entity>
     <entity name="Photo" representedClassName="Photo" syncable="YES" codeGenerationType="class">
+        <attribute name="assetIdentifier" optional="YES" attributeType="String"/>
         <attribute name="caption" optional="YES" attributeType="String"/>
         <attribute name="createdDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="filename" optional="YES" attributeType="String"/>

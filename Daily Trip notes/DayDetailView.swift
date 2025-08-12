@@ -186,7 +186,9 @@ struct DayDetailView: View {
                 if let data = try? await photoItem.loadTransferable(type: Data.self) {
                     print("DayDetailView: Successfully loaded photo data, size: \(data.count) bytes")
                     await MainActor.run {
-                        saveMedia(data: data, order: index, mediaType: "photo")
+                        // For PhotosPicker items, we don't have the PHAsset, so we can't store the identifier
+                        // This is a limitation of PhotosPicker vs CustomPhotoPickerView
+                        saveMedia(data: data, order: index, mediaType: "photo", asset: nil)
                     }
                 } else {
                     print("DayDetailView: Failed to load photo data for photo \(index + 1)")
@@ -215,7 +217,7 @@ struct DayDetailView: View {
                     let mediaType = asset.mediaType == PHAssetMediaType.video ? "video" : "photo"
                     print("DayDetailView: Successfully loaded \(mediaType) data, size: \(data.count) bytes")
                     await MainActor.run {
-                        saveMedia(data: data, order: index, mediaType: mediaType)
+                        saveMedia(data: data, order: index, mediaType: mediaType, asset: asset)
                     }
                 } else {
                     print("DayDetailView: Failed to load PHAsset data for asset \(index + 1)")
@@ -267,7 +269,7 @@ struct DayDetailView: View {
         }
     }
     
-    private func saveMedia(data: Data, order: Int, mediaType: String) {
+    private func saveMedia(data: Data, order: Int, mediaType: String, asset: PHAsset?) {
         let photo = Photo(context: viewContext)
         photo.id = UUID()
         
@@ -281,6 +283,7 @@ struct DayDetailView: View {
         photo.mediaType = mediaType
         photo.caption = ""
         photo.createdDate = Date()
+        photo.assetIdentifier = asset?.localIdentifier
         
         print("DayDetailView: Saving \(mediaType) with createdDate: \(photo.createdDate ?? Date())")
         
@@ -577,18 +580,14 @@ struct CustomPhotoPickerView: View {
     }
     
     private func isPhotoAlreadyAdded(_ asset: PHAsset) -> Bool {
-        // Check if this photo is already added by comparing creation dates with existing photos
-        // Since we can't directly compare PHAsset with Core Data Photo objects, we use date comparison
-        guard let creationDate = asset.creationDate else { 
-            print("CustomPhotoPickerView: Asset has no creation date")
-            return false 
-        }
+        // Check if this photo is already added by comparing PHAsset identifiers
+        // This is the most reliable way to detect duplicates
         
-        print("CustomPhotoPickerView: Checking if asset with creationDate \(creationDate) is already added")
+        print("CustomPhotoPickerView: Checking if asset with identifier \(asset.localIdentifier) is already added")
         print("CustomPhotoPickerView: TripDay has \(tripDay.photos?.count ?? 0) photos")
         
-        // Strategy: Use photo identifiers for exact matching instead of unreliable date comparison
-        // This bypasses time zone and date interpretation issues
+        // Strategy: Store and compare PHAsset identifiers for exact matching
+        // We need to add an assetIdentifier field to our Photo entity to make this work
         
         for (index, photo) in (tripDay.photos ?? []).enumerated() {
             guard let coreDataPhoto = photo as? Photo else { 
@@ -598,31 +597,18 @@ struct CustomPhotoPickerView: View {
             
             print("CustomPhotoPickerView: Checking Photo \(index):")
             print("  - filename: \(coreDataPhoto.filename ?? "nil")")
-            print("  - photoDate: \(coreDataPhoto.photoDate?.description ?? "nil")")
-            print("  - createdDate: \(coreDataPhoto.createdDate?.description ?? "nil")")
+            print("  - assetIdentifier: \(coreDataPhoto.assetIdentifier ?? "nil")")
             
-            // Strategy: Check if this photo was saved from the same PHAsset
-            // We can do this by comparing the filename pattern or checking if we stored the asset identifier
-            if let filename = coreDataPhoto.filename {
-                // Check if this filename matches the pattern we use for this asset
-                // Since we can't directly compare PHAsset with Core Data, we'll use a more reliable approach
-                print("  - Checking filename: \(filename)")
-                
-                // For now, let's use a simple approach: check if we have a photo with the same creation date
-                // but with a much stricter tolerance since we're dealing with UTC dates
-                if let photoDate = coreDataPhoto.photoDate {
-                    let timeDifference = abs(photoDate.timeIntervalSince(creationDate))
-                    print("  - photoDate difference: \(timeDifference)s")
-                    // Use 4-hour tolerance to account for system clock differences
-                    if timeDifference <= 14400.0 { // 4 hours = 14400 seconds
-                        print("CustomPhotoPickerView: ✅ Duplicate detected by photoDate - difference: \(timeDifference)s")
-                        return true
-                    }
+            // Check if this photo was saved from the same PHAsset by comparing identifiers
+            if let storedIdentifier = coreDataPhoto.assetIdentifier {
+                if storedIdentifier == asset.localIdentifier {
+                    print("CustomPhotoPickerView: ✅ Duplicate detected by asset identifier match!")
+                    return true
                 }
             }
         }
         
-        print("CustomPhotoPickerView: ❌ No duplicate detected for asset with creationDate \(creationDate)")
+        print("CustomPhotoPickerView: ❌ No duplicate detected for asset with identifier \(asset.localIdentifier)")
         return false
     }
     

@@ -5,6 +5,7 @@ import ImageIO
 import Photos
 import AVFoundation
 import AVKit
+import Foundation
 
 struct DayDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
@@ -335,6 +336,9 @@ struct DayDetailView: View {
         // Debug: Check the current trip day's media count
         let currentMedia = tripDay.photos?.allObjects as? [Photo] ?? []
         print("DayDetailView: Current trip day has \(currentMedia.count) media items after saving")
+        
+        // Post notification to refresh trip detail view
+        NotificationCenter.default.post(name: .photosAddedToTripDay, object: tripDay)
     }
 }
 

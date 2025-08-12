@@ -1,6 +1,13 @@
 import SwiftUI
 import CoreData
 import Photos
+import MapKit
+import Foundation
+
+enum ViewMode {
+    case dates
+    case map
+}
 
 struct TripDetailView: View {
     let trip: Trip
@@ -10,6 +17,7 @@ struct TripDetailView: View {
     @State private var showingFeaturePhotoPicker = false
     @State private var refreshTrigger = false
     @State private var journalRefreshTrigger = false
+    @State private var viewMode: ViewMode = .dates
     
     var sortedDays: [TripDay] {
         trip.tripDays?.allObjects as? [TripDay] ?? []
@@ -111,7 +119,19 @@ struct TripDetailView: View {
                 .padding(.vertical, 4)
             }
             
-            Section("Trip Days") {
+            // View Mode Selector
+            Section {
+                Picker("View Mode", selection: $viewMode) {
+                    Text("Dates").tag(ViewMode.dates)
+                    Text("Map").tag(ViewMode.map)
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding(.vertical, 8)
+            }
+            
+            // Content based on view mode
+            if viewMode == .dates {
+                Section("Trip Days") {
                 if sortedDays.isEmpty {
                     Text("No days added yet")
                         .foregroundColor(.secondary)
@@ -125,13 +145,26 @@ struct TripDetailView: View {
                     .onDelete(perform: deleteDays)
                 }
             }
+            } else {
+                Section("Trip Map") {
+                    TripMapView(trip: trip)
+                        .frame(height: 400)
+                        .listRowInsets(EdgeInsets())
+                }
+            }
         }
         .navigationTitle("Trip Details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Edit") {
-                    showingEditTrip = true
+                if viewMode == .map {
+                    Button("Add Day") {
+                        showingAddDay = true
+                    }
+                } else {
+                    Button("Edit") {
+                        showingEditTrip = true
+                    }
                 }
             }
         }
@@ -163,6 +196,13 @@ struct TripDetailView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .journalEntrySaved)) { _ in
             journalRefreshTrigger.toggle()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .photosAddedToTripDay)) { notification in
+            // Check if the photo was added to a day in this trip
+            if let tripDay = notification.object as? TripDay,
+               tripDay.trip?.id == trip.id {
+                refreshTrigger.toggle() // Force refresh to show new photos
+            }
         }
         .id(refreshTrigger) // Force refresh when editing sheet is dismissed
     }
@@ -649,6 +689,97 @@ struct TripPhotoThumbnailView: View {
             }
         }
     }
+}
+
+struct TripMapView: View {
+    let trip: Trip
+    @State private var region = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194), // Default to San Francisco
+        span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+    )
+    @State private var photoAnnotations: [PhotoAnnotation] = []
+    
+    var body: some View {
+        Map(coordinateRegion: $region, annotationItems: photoAnnotations) { annotation in
+            MapAnnotation(coordinate: annotation.coordinate) {
+                VStack(spacing: 0) {
+                    Image(systemName: "photo.circle.fill")
+                        .font(.title)
+                        .foregroundColor(.blue)
+                        .background(Color.white)
+                        .clipShape(Circle())
+                    
+                    Text(annotation.title)
+                        .font(.caption)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.white)
+                        .foregroundColor(.black)
+                        .cornerRadius(8)
+                }
+            }
+        }
+        .onAppear {
+            loadPhotoAnnotations()
+        }
+    }
+    
+    private func loadPhotoAnnotations() {
+        let allPhotos = trip.tripDays?.allObjects.compactMap { $0 as? TripDay } ?? []
+        var annotations: [PhotoAnnotation] = []
+        
+        for day in allPhotos {
+            let photos = day.photos?.allObjects as? [Photo] ?? []
+            for photo in photos {
+                // For now, we'll use a default location based on the trip dates
+                // In a real app, you'd extract GPS coordinates from the photo metadata
+                let coordinate = CLLocationCoordinate2D(
+                    latitude: 37.7749 + Double.random(in: -0.01...0.01), // Random offset for demo
+                    longitude: -122.4194 + Double.random(in: -0.01...0.01)
+                )
+                
+                let annotation = PhotoAnnotation(
+                    coordinate: coordinate,
+                    title: day.date?.formatted(date: .abbreviated, time: .omitted) ?? "Unknown Date",
+                    subtitle: photo.caption ?? "Photo",
+                    photo: photo
+                )
+                annotations.append(annotation)
+            }
+        }
+        
+        photoAnnotations = annotations
+        
+        // Update map region to show all annotations
+        if !annotations.isEmpty {
+            let latitudes = annotations.map { $0.coordinate.latitude }
+            let longitudes = annotations.map { $0.coordinate.longitude }
+            
+            let minLat = latitudes.min() ?? 37.7749
+            let maxLat = latitudes.max() ?? 37.7749
+            let minLon = longitudes.min() ?? -122.4194
+            let maxLon = longitudes.max() ?? -122.4194
+            
+            region = MKCoordinateRegion(
+                center: CLLocationCoordinate2D(
+                    latitude: (minLat + maxLat) / 2,
+                    longitude: (minLon + maxLon) / 2
+                ),
+                span: MKCoordinateSpan(
+                    latitudeDelta: (maxLat - minLat) * 1.5,
+                    longitudeDelta: (maxLon - minLon) * 1.5
+                )
+            )
+        }
+    }
+}
+
+struct PhotoAnnotation: Identifiable {
+    let id = UUID()
+    let coordinate: CLLocationCoordinate2D
+    let title: String
+    let subtitle: String
+    let photo: Photo
 }
 
 #Preview {

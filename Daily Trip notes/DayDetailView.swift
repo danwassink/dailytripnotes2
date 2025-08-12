@@ -622,8 +622,8 @@ struct CustomPhotoPickerView: View {
                 print("  - photoDate: \(photoDate.description)")
                 print("  - photoDate difference: \(timeDifference)s")
                 
-                // Use 5-minute tolerance for existing photos (more lenient since we're falling back)
-                if timeDifference <= 300.0 { // 5 minutes = 300 seconds
+                // Use 4-hour tolerance for existing photos (more lenient since we're falling back)
+                if timeDifference <= 14400.0 { // 4 hours = 14400 seconds
                     print("CustomPhotoPickerView: ✅ Duplicate detected by photoDate fallback - difference: \(timeDifference)s")
                     return true
                 }

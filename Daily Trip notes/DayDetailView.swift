@@ -971,9 +971,35 @@ struct SmartSuggestionView: View {
     
     private func loadThumbnail() async {
         let options = PHImageRequestOptions()
-        options.deliveryMode = .fastFormat
-        options.isNetworkAccessAllowed = false
-        options.resizeMode = .exact
+        options.deliveryMode = .opportunistic
+        options.isNetworkAccessAllowed = true
+        options.resizeMode = .fast
+        
+        let targetSize = CGSize(width: 120, height: 120)
+        
+        // First try to get a fast thumbnail
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: .aspectFill,
+            options: options
+        ) { image, info in
+            DispatchQueue.main.async {
+                if let image = image {
+                    self.image = image
+                } else {
+                    // If fast thumbnail fails, try with more flexible options
+                    self.loadThumbnailWithFallback()
+                }
+            }
+        }
+    }
+    
+    private func loadThumbnailWithFallback() {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = true
+        options.isSynchronous = false
         
         let targetSize = CGSize(width: 120, height: 120)
         
@@ -984,7 +1010,41 @@ struct SmartSuggestionView: View {
             options: options
         ) { image, info in
             DispatchQueue.main.async {
-                self.image = image
+                if let image = image {
+                    self.image = image
+                } else {
+                    // If all else fails, try to get the full image and scale it down
+                    self.loadFullImageAndScale()
+                }
+            }
+        }
+    }
+    
+    private func loadFullImageAndScale() {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = true
+        options.isSynchronous = false
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: PHImageManagerMaximumSize,
+            contentMode: .aspectFit,
+            options: options
+        ) { image, info in
+            DispatchQueue.main.async {
+                if let image = image {
+                    // Scale down the full image to thumbnail size
+                    let thumbnailSize = CGSize(width: 120, height: 120)
+                    UIGraphicsBeginImageContextWithOptions(thumbnailSize, false, 0.0)
+                    image.draw(in: CGRect(origin: .zero, size: thumbnailSize))
+                    let thumbnail = UIGraphicsGetImageFromCurrentImageContext()
+                    UIGraphicsEndImageContext()
+                    
+                    self.image = thumbnail
+                } else {
+                    print("SmartSuggestionView: Failed to load image for asset: \(self.asset.localIdentifier)")
+                }
             }
         }
     }

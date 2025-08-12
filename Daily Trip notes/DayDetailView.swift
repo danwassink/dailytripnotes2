@@ -492,6 +492,7 @@ struct CustomPhotoPickerView: View {
     @State private var photos: [PHAsset] = []
     @State private var selectedPhotos: [PHAsset] = []
     @State private var isLoading = true
+    @State private var alreadyAddedPhotos: [String] = [] // Store filenames of already added photos
     
     var body: some View {
         NavigationView {
@@ -519,11 +520,19 @@ struct CustomPhotoPickerView: View {
                     ScrollView {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
                             ForEach(photos, id: \.localIdentifier) { asset in
-                                PhotoAssetView(asset: asset, isSelected: selectedPhotos.contains(asset)) {
-                                    if selectedPhotos.contains(asset) {
-                                        selectedPhotos.removeAll { $0.localIdentifier == asset.localIdentifier }
-                                    } else {
-                                        selectedPhotos.append(asset)
+                                let isAlreadyAdded = isPhotoAlreadyAdded(asset)
+                                PhotoAssetView(
+                                    asset: asset, 
+                                    isSelected: selectedPhotos.contains(asset),
+                                    isDisabled: isAlreadyAdded
+                                ) {
+                                    // Only allow selection if not already added
+                                    if !isAlreadyAdded {
+                                        if selectedPhotos.contains(asset) {
+                                            selectedPhotos.removeAll { $0.localIdentifier == asset.localIdentifier }
+                                        } else {
+                                            selectedPhotos.append(asset)
+                                        }
                                     }
                                 }
                             }
@@ -552,7 +561,42 @@ struct CustomPhotoPickerView: View {
         }
         .onAppear {
             loadPhotosFromDate()
+            checkAlreadyAddedPhotos()
         }
+    }
+    
+    private func checkAlreadyAddedPhotos() {
+        // Get filenames of photos already added to this trip day
+        let existingFilenames = tripDay.photos?.compactMap { photo in
+            (photo as? Photo)?.filename
+        } ?? []
+        
+        alreadyAddedPhotos = existingFilenames
+        print("CustomPhotoPickerView: Found \(alreadyAddedPhotos.count) already added photos")
+    }
+    
+    private func isPhotoAlreadyAdded(_ asset: PHAsset) -> Bool {
+        // Check if this photo is already added by comparing creation date and other metadata
+        // Since we can't directly compare PHAsset to Core Data Photo, we'll use a heuristic approach
+        
+        guard let creationDate = asset.creationDate else { return false }
+        
+        // Check if any photo in the trip day has the same creation date (within a small tolerance)
+        let tolerance: TimeInterval = 1.0 // 1 second tolerance
+        
+        for photo in tripDay.photos ?? [] {
+            guard let coreDataPhoto = photo as? Photo else { continue }
+            
+            // If the photo has a photoDate, compare it
+            if let photoDate = coreDataPhoto.photoDate {
+                let timeDifference = abs(photoDate.timeIntervalSince(creationDate))
+                if timeDifference <= tolerance {
+                    return true
+                }
+            }
+        }
+        
+        return false
     }
     
     private func loadPhotosFromDate() {
@@ -612,6 +656,7 @@ struct CustomPhotoPickerView: View {
 struct PhotoAssetView: View {
     let asset: PHAsset
     let isSelected: Bool
+    let isDisabled: Bool
     let onTap: () -> Void
     
     @State private var image: UIImage?
@@ -625,6 +670,11 @@ struct PhotoAssetView: View {
                     .frame(width: 100, height: 100)
                     .clipped()
                     .cornerRadius(8)
+                    .overlay(
+                        // Gray overlay for disabled photos
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isDisabled ? Color.black.opacity(0.4) : Color.clear)
+                    )
             } else {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(.systemGray5))
@@ -650,9 +700,28 @@ struct PhotoAssetView: View {
                 }
                 .padding(4)
             }
+            
+            // Already added indicator
+            if isDisabled {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.white)
+                            .background(Color.green)
+                            .clipShape(Circle())
+                            .font(.title2)
+                    }
+                    Spacer()
+                }
+                .padding(4)
+            }
         }
         .onTapGesture {
-            onTap()
+            // Only allow tap if not disabled
+            if !isDisabled {
+                onTap()
+            }
         }
         .task {
             await loadThumbnail()

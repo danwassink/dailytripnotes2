@@ -580,14 +580,17 @@ struct CustomPhotoPickerView: View {
     }
     
     private func isPhotoAlreadyAdded(_ asset: PHAsset) -> Bool {
-        // Check if this photo is already added by comparing PHAsset identifiers
-        // This is the most reliable way to detect duplicates
+        // Check if this photo is already added using a hybrid approach
+        // 1. First try identifier matching (for new photos with assetIdentifier)
+        // 2. Fall back to date matching (for existing photos without assetIdentifier)
         
         print("CustomPhotoPickerView: Checking if asset with identifier \(asset.localIdentifier) is already added")
         print("CustomPhotoPickerView: TripDay has \(tripDay.photos?.count ?? 0) photos")
         
-        // Strategy: Store and compare PHAsset identifiers for exact matching
-        // We need to add an assetIdentifier field to our Photo entity to make this work
+        guard let creationDate = asset.creationDate else { 
+            print("CustomPhotoPickerView: Asset has no creation date")
+            return false 
+        }
         
         for (index, photo) in (tripDay.photos ?? []).enumerated() {
             guard let coreDataPhoto = photo as? Photo else { 
@@ -599,10 +602,23 @@ struct CustomPhotoPickerView: View {
             print("  - filename: \(coreDataPhoto.filename ?? "nil")")
             print("  - assetIdentifier: \(coreDataPhoto.assetIdentifier ?? "nil")")
             
-            // Check if this photo was saved from the same PHAsset by comparing identifiers
+            // Strategy 1: Check if this photo was saved from the same PHAsset by comparing identifiers
             if let storedIdentifier = coreDataPhoto.assetIdentifier {
                 if storedIdentifier == asset.localIdentifier {
                     print("CustomPhotoPickerView: ✅ Duplicate detected by asset identifier match!")
+                    return true
+                }
+            }
+            
+            // Strategy 2: Fall back to date matching for existing photos without assetIdentifier
+            if coreDataPhoto.assetIdentifier == nil, let photoDate = coreDataPhoto.photoDate {
+                let timeDifference = abs(photoDate.timeIntervalSince(creationDate))
+                print("  - photoDate: \(photoDate.description)")
+                print("  - photoDate difference: \(timeDifference)s")
+                
+                // Use 5-minute tolerance for existing photos (more lenient since we're falling back)
+                if timeDifference <= 300.0 { // 5 minutes = 300 seconds
+                    print("CustomPhotoPickerView: ✅ Duplicate detected by photoDate fallback - difference: \(timeDifference)s")
                     return true
                 }
             }

@@ -492,10 +492,62 @@ struct CustomPhotoPickerView: View {
     @State private var photos: [PHAsset] = []
     @State private var selectedPhotos: [PHAsset] = []
     @State private var isLoading = true
+    @State private var smartSuggestions: [PHAsset] = []
+    @State private var isLoadingSuggestions = true
+    @State private var showingAllPhotos = false
     
     var body: some View {
         NavigationView {
             VStack {
+                // Smart Suggestions Section
+                if !isLoadingSuggestions && !smartSuggestions.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "lightbulb.fill")
+                                .foregroundColor(.yellow)
+                                .font(.title2)
+                            Text("Smart Suggestions")
+                                .font(.headline)
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Text("\(smartSuggestions.count) photos")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(8)
+                        }
+                        .padding(.horizontal)
+                        
+                        Text("Photos from your trip dates that might be relevant")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
+                        
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(smartSuggestions, id: \.localIdentifier) { asset in
+                                    SmartSuggestionView(
+                                        asset: asset,
+                                        isSelected: selectedPhotos.contains(asset)
+                                    ) {
+                                        if selectedPhotos.contains(asset) {
+                                            selectedPhotos.removeAll { $0.localIdentifier == asset.localIdentifier }
+                                        } else {
+                                            selectedPhotos.append(asset)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                        
+                        Divider()
+                            .padding(.horizontal)
+                    }
+                }
+                
                 if isLoading {
                     ProgressView("Loading photos from \(formatDate(tripDay.date))...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -516,19 +568,65 @@ struct CustomPhotoPickerView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    ScrollView {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
-                            ForEach(photos, id: \.localIdentifier) { asset in
-                                PhotoAssetView(asset: asset, isSelected: selectedPhotos.contains(asset)) {
-                                    if selectedPhotos.contains(asset) {
-                                        selectedPhotos.removeAll { $0.localIdentifier == asset.localIdentifier }
-                                    } else {
-                                        selectedPhotos.append(asset)
+                    VStack(spacing: 16) {
+                        // Toggle for showing all photos
+                        HStack {
+                            Text("Photos from \(formatDate(tripDay.date))")
+                                .font(.headline)
+                            Spacer()
+                            Button(showingAllPhotos ? "Show Less" : "Show All") {
+                                showingAllPhotos.toggle()
+                            }
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                        }
+                        .padding(.horizontal)
+                        
+                        if showingAllPhotos {
+                            ScrollView {
+                                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
+                                    ForEach(photos, id: \.localIdentifier) { asset in
+                                        PhotoAssetView(asset: asset, isSelected: selectedPhotos.contains(asset)) {
+                                            if selectedPhotos.contains(asset) {
+                                                selectedPhotos.removeAll { $0.localIdentifier == asset.localIdentifier }
+                                            } else {
+                                                selectedPhotos.append(asset)
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding()
+                            }
+                        } else {
+                            // Show just a preview of photos
+                            HStack {
+                                ForEach(Array(photos.prefix(6)), id: \.localIdentifier) { asset in
+                                    PhotoAssetView(asset: asset, isSelected: selectedPhotos.contains(asset)) {
+                                        if selectedPhotos.contains(asset) {
+                                            selectedPhotos.removeAll { $0.localIdentifier == asset.localIdentifier }
+                                        } else {
+                                            selectedPhotos.append(asset)
+                                        }
+                                    }
+                                }
+                                if photos.count > 6 {
+                                    Button(action: { showingAllPhotos = true }) {
+                                        VStack {
+                                            Text("+\(photos.count - 6)")
+                                                .font(.title2)
+                                                .fontWeight(.bold)
+                                            Text("More")
+                                                .font(.caption)
+                                        }
+                                        .foregroundColor(.blue)
+                                        .frame(width: 80, height: 80)
+                                        .background(Color(.systemGray6))
+                                        .cornerRadius(8)
                                     }
                                 }
                             }
+                            .padding(.horizontal)
                         }
-                        .padding()
                     }
                 }
             }
@@ -552,6 +650,49 @@ struct CustomPhotoPickerView: View {
         }
         .onAppear {
             loadPhotosFromDate()
+            loadSmartSuggestions()
+        }
+    }
+    
+    private func loadSmartSuggestions() {
+        guard let trip = tripDay.trip else { return }
+        
+        let status = PHPhotoLibrary.authorizationStatus()
+        guard status == .authorized || status == .limited else { return }
+        
+        let tripStart = Calendar.current.startOfDay(for: trip.startDate ?? Date())
+        let tripEnd = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: trip.endDate ?? Date())) ?? tripStart
+        
+        print("CustomPhotoPickerView: Loading smart suggestions from \(tripStart) to \(tripEnd)")
+        
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@", tripStart as NSDate, tripEnd as NSDate)
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        
+        // Fetch images and videos from trip date range
+        let imageFetchResult = PHAsset.fetchAssets(with: PHAssetMediaType.image, options: options)
+        let videoFetchResult = PHAsset.fetchAssets(with: PHAssetMediaType.video, options: options)
+        
+        var suggestions: [PHAsset] = []
+        
+        // Add images first (limit to 20 for performance)
+        imageFetchResult.enumerateObjects { asset, _, _ in
+            if suggestions.count < 20 {
+                suggestions.append(asset)
+            }
+        }
+        
+        // Add videos (limit to 10 for performance)
+        videoFetchResult.enumerateObjects { asset, _, _ in
+            if suggestions.count < 30 {
+                suggestions.append(asset)
+            }
+        }
+        
+        DispatchQueue.main.async {
+            self.smartSuggestions = suggestions
+            self.isLoadingSuggestions = false
+            print("CustomPhotoPickerView: Loaded \(suggestions.count) smart suggestions")
         }
     }
     
@@ -758,6 +899,93 @@ struct VideoPlayerView: View {
         if FileManager.default.fileExists(atPath: videoURL.path) {
             player = AVPlayer(url: videoURL)
             player?.play()
+        }
+    }
+}
+
+struct SmartSuggestionView: View {
+    let asset: PHAsset
+    let isSelected: Bool
+    let onTap: () -> Void
+    
+    @State private var image: UIImage?
+    
+    var body: some View {
+        ZStack {
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 120, height: 120)
+                    .clipped()
+                    .cornerRadius(12)
+            } else {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.systemGray5))
+                    .frame(width: 120, height: 120)
+                    .overlay(
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    )
+            }
+            
+            // Selection indicator
+            if isSelected {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.white)
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                            .font(.title2)
+                    }
+                    Spacer()
+                }
+                .padding(4)
+            }
+            
+            // Video indicator
+            if asset.mediaType == .video {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Image(systemName: "play.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .background(Color.black.opacity(0.6))
+                            .clipShape(Circle())
+                    }
+                    .padding(4)
+                }
+            }
+        }
+        .onTapGesture {
+            onTap()
+        }
+        .task {
+            await loadThumbnail()
+        }
+    }
+    
+    private func loadThumbnail() async {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .fastFormat
+        options.isNetworkAccessAllowed = false
+        options.resizeMode = .exact
+        
+        let targetSize = CGSize(width: 120, height: 120)
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: .aspectFill,
+            options: options
+        ) { image, info in
+            DispatchQueue.main.async {
+                self.image = image
+            }
         }
     }
 }

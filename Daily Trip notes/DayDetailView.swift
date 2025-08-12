@@ -278,7 +278,7 @@ struct DayDetailView: View {
             photo.filename = "photo_\(UUID().uuidString).jpg"
         }
         
-        photo.mediaType = mediaType
+        // photo.mediaType = mediaType  // Temporarily commented out - rebuild in Xcode to regenerate Core Data classes
         photo.caption = ""
         photo.createdDate = Date()
         
@@ -370,7 +370,7 @@ struct PhotoThumbnailView: View {
             }
             
             // Video indicator
-            if photo.mediaType == "video" {
+            if false { // photo.mediaType == "video"  // Temporarily commented out - rebuild in Xcode to regenerate Core Data classes
                 VStack {
                     Spacer()
                     HStack {
@@ -402,7 +402,7 @@ struct PhotoThumbnailView: View {
             }
         }
         .onTapGesture {
-            if photo.mediaType == "video" {
+            if false { // photo.mediaType == "video"  // Temporarily commented out - rebuild in Xcode to regenerate Core Data classes
                 showingVideoPlayer = true
             }
         }
@@ -415,7 +415,7 @@ struct PhotoThumbnailView: View {
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("Are you sure you want to delete this \(photo.mediaType ?? "media")? This action cannot be undone.")
+            Text("Are you sure you want to delete this media? This action cannot be undone.")  // Temporarily simplified - rebuild in Xcode to regenerate Core Data classes
         }
         .sheet(isPresented: $showingVideoPlayer) {
             if let filename = photo.filename {
@@ -431,7 +431,7 @@ struct PhotoThumbnailView: View {
         guard let filename = photo.filename else { return }
         
         // Handle videos differently - generate thumbnail
-        if photo.mediaType == "video" {
+        if false { // photo.mediaType == "video"  // Temporarily commented out - rebuild in Xcode to regenerate Core Data classes
             await generateVideoThumbnail(filename: filename)
         } else {
             // Load photo as before

@@ -3,6 +3,8 @@ import PhotosUI
 import CoreData
 import ImageIO
 import Photos
+import AVFoundation
+import AVKit
 
 struct DayDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
@@ -83,8 +85,8 @@ struct DayDetailView: View {
             .padding(.top, 20)
             .padding(.bottom, 24)
             
-            // Photos Section
-            Section("Photos") {
+            // Media Section
+            Section("Media") {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
                     ForEach(sortedPhotos, id: \.id) { photo in
                         PhotoThumbnailView(photo: photo, onPhotoDeleted: {
@@ -100,7 +102,7 @@ struct DayDetailView: View {
                             Image(systemName: "plus.circle.fill")
                                 .font(.system(size: 30))
                                 .foregroundColor(.blue)
-                            Text("Add Photos")
+                            Text("Add Media")
                                 .font(.caption)
                                 .foregroundColor(.blue)
                         }
@@ -183,7 +185,7 @@ struct DayDetailView: View {
                 if let data = try? await photoItem.loadTransferable(type: Data.self) {
                     print("DayDetailView: Successfully loaded photo data, size: \(data.count) bytes")
                     await MainActor.run {
-                        savePhoto(data: data, order: index)
+                        saveMedia(data: data, order: index, mediaType: "photo")
                     }
                 } else {
                     print("DayDetailView: Failed to load photo data for photo \(index + 1)")
@@ -207,11 +209,12 @@ struct DayDetailView: View {
             for (index, asset) in assets.enumerated() {
                 print("DayDetailView: Processing PHAsset \(index + 1) of \(assets.count)")
                 
-                let data = await loadImageDataFromAsset(asset)
+                let data = await loadMediaDataFromAsset(asset)
                 if let data = data {
-                    print("DayDetailView: Successfully loaded PHAsset data, size: \(data.count) bytes")
+                    let mediaType = asset.mediaType == PHAssetMediaType.video ? "video" : "photo"
+                    print("DayDetailView: Successfully loaded \(mediaType) data, size: \(data.count) bytes")
                     await MainActor.run {
-                        savePhoto(data: data, order: index)
+                        saveMedia(data: data, order: index, mediaType: mediaType)
                     }
                 } else {
                     print("DayDetailView: Failed to load PHAsset data for asset \(index + 1)")
@@ -226,74 +229,112 @@ struct DayDetailView: View {
         }
     }
     
-    private func loadImageDataFromAsset(_ asset: PHAsset) async -> Data? {
+    private func loadMediaDataFromAsset(_ asset: PHAsset) async -> Data? {
         return await withCheckedContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.deliveryMode = .highQualityFormat
-            options.isNetworkAccessAllowed = false
-            options.isSynchronous = false
-            
-            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
-                continuation.resume(returning: data)
+            if asset.mediaType == PHAssetMediaType.video {
+                // For videos, use PHVideoRequestOptions
+                let options = PHVideoRequestOptions()
+                options.deliveryMode = .highQualityFormat
+                options.isNetworkAccessAllowed = false
+                options.version = .current
+                
+                PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
+                    if let avAsset = avAsset as? AVURLAsset {
+                        // Read the video file data
+                        do {
+                            let data = try Data(contentsOf: avAsset.url)
+                            continuation.resume(returning: data)
+                        } catch {
+                            print("DayDetailView: Failed to read video data: \(error)")
+                            continuation.resume(returning: nil)
+                        }
+                    } else {
+                        continuation.resume(returning: nil)
+                    }
+                }
+            } else {
+                // For photos, use PHImageRequestOptions
+                let options = PHImageRequestOptions()
+                options.deliveryMode = .highQualityFormat
+                options.isNetworkAccessAllowed = false
+                options.isSynchronous = false
+                
+                PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
+                    continuation.resume(returning: data)
+                }
             }
         }
     }
     
-    private func savePhoto(data: Data, order: Int) {
+    private func saveMedia(data: Data, order: Int, mediaType: String) {
         let photo = Photo(context: viewContext)
         photo.id = UUID()
-        photo.filename = "photo_\(UUID().uuidString).jpg"
+        
+        // Set filename based on media type
+        if mediaType == "video" {
+            photo.filename = "video_\(UUID().uuidString).mov"
+        } else {
+            photo.filename = "photo_\(UUID().uuidString).jpg"
+        }
+        
+        photo.mediaType = mediaType
         photo.caption = ""
         photo.createdDate = Date()
         
-        print("DayDetailView: Saving photo with createdDate: \(photo.createdDate ?? Date())")
+        print("DayDetailView: Saving \(mediaType) with createdDate: \(photo.createdDate ?? Date())")
         
-        // Try to extract the actual photo date from the image data
-        if let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
-           let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [String: Any],
-           let exif = properties["{Exif}"] as? [String: Any],
-           let dateString = exif["DateTimeOriginal"] as? String {
-            
-            print("DayDetailView: Found EXIF date: \(dateString)")
-            
-            // Parse the EXIF date (format: "2024:01:15 14:30:25")
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
-            if let photoDate = formatter.date(from: dateString) {
-                photo.photoDate = photoDate
-                print("DayDetailView: Set photoDate from EXIF: \(photoDate)")
+        // Try to extract the actual photo date from the image data (only for photos)
+        if mediaType == "photo" {
+            if let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
+               let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [String: Any],
+               let exif = properties["{Exif}"] as? [String: Any],
+               let dateString = exif["DateTimeOriginal"] as? String {
+                
+                print("DayDetailView: Found EXIF date: \(dateString)")
+                
+                // Parse the EXIF date (format: "2024:01:15 14:30:25")
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+                if let photoDate = formatter.date(from: dateString) {
+                    photo.photoDate = photoDate
+                    print("DayDetailView: Set photoDate from EXIF: \(photoDate)")
+                } else {
+                    // Use trip day date instead of current date
+                    photo.photoDate = tripDay.date ?? Date()
+                    print("DayDetailView: Failed to parse EXIF date, using trip day date: \(tripDay.date ?? Date())")
+                }
             } else {
-                // Use trip day date instead of current date
+                // If no EXIF data, use trip day date instead of current date
                 photo.photoDate = tripDay.date ?? Date()
-                print("DayDetailView: Failed to parse EXIF date, using trip day date: \(tripDay.date ?? Date())")
+                print("DayDetailView: No EXIF data found, using trip day date: \(tripDay.date ?? Date())")
             }
         } else {
-            // If no EXIF data, use trip day date instead of current date
+            // For videos, use trip day date
             photo.photoDate = tripDay.date ?? Date()
-            print("DayDetailView: No EXIF data found, using trip day date: \(tripDay.date ?? Date())")
+            print("DayDetailView: Using trip day date for video: \(tripDay.date ?? Date())")
         }
         
         photo.order = Int32(order)
         photo.tripDay = tripDay
         
-        // Save the photo file to documents directory
+        // Save the media file to documents directory
         if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let photoURL = documentsPath.appendingPathComponent(photo.filename!)
-            try? data.write(to: photoURL)
+            let mediaURL = documentsPath.appendingPathComponent(photo.filename!)
+            try? data.write(to: mediaURL)
         }
         
         // Save to Core Data
         try? viewContext.save()
         
-        print("DayDetailView: Photo saved successfully")
+        print("DayDetailView: \(mediaType.capitalized) saved successfully")
         
-        // Debug: Check if the photo is properly associated
-        print("DayDetailView: Photo tripDay: \(photo.tripDay?.date ?? Date())")
-        print("DayDetailView: Photo tripDay ID: \(photo.tripDay?.id?.uuidString ?? "nil")")
+        // Debug: Check if the media is properly associated
+        print("DayDetailView: \(mediaType.capitalized) tripDay: \(photo.tripDay?.date ?? Date())")
+        print("DayDetailView: Media tripDay ID: \(photo.tripDay?.id?.uuidString ?? "nil")")
         
-        // Debug: Check the current trip day's photos count
-        let currentPhotos = tripDay.photos?.allObjects as? [Photo] ?? []
-        print("DayDetailView: Current trip day has \(currentPhotos.count) photos after saving")
+        // Debug: Check the current trip day's media count
+        let currentMedia = tripDay.photos?.allObjects as? [Photo] ?? []
+        print("DayDetailView: Current trip day has \(currentMedia.count) media items after saving")
     }
 }
 
@@ -302,6 +343,7 @@ struct PhotoThumbnailView: View {
     let onPhotoDeleted: () -> Void
     @State private var image: UIImage?
     @State private var showingDeleteAlert = false
+    @State private var showingVideoPlayer = false
     @Environment(\.managedObjectContext) private var viewContext
     
     var body: some View {
@@ -323,6 +365,22 @@ struct PhotoThumbnailView: View {
                     )
             }
             
+            // Video indicator
+            if photo.mediaType == "video" {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Image(systemName: "play.circle.fill")
+                            .foregroundColor(.white)
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                            .font(.title2)
+                            .padding(4)
+                    }
+                }
+            }
+            
             // Caption indicator
             if let caption = photo.caption, !caption.isEmpty {
                 VStack {
@@ -339,16 +397,26 @@ struct PhotoThumbnailView: View {
                 }
             }
         }
+        .onTapGesture {
+            if photo.mediaType == "video" {
+                showingVideoPlayer = true
+            }
+        }
         .onLongPressGesture {
             showingDeleteAlert = true
         }
-        .alert("Delete Photo", isPresented: $showingDeleteAlert) {
+        .alert("Delete Media", isPresented: $showingDeleteAlert) {
             Button("Delete", role: .destructive) {
                 deletePhoto()
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("Are you sure you want to delete this photo? This action cannot be undone.")
+            Text("Are you sure you want to delete this \(photo.mediaType ?? "media")? This action cannot be undone.")
+        }
+        .sheet(isPresented: $showingVideoPlayer) {
+            if let filename = photo.filename {
+                VideoPlayerView(filename: filename)
+            }
         }
         .task {
             await loadPhoto()
@@ -358,13 +426,37 @@ struct PhotoThumbnailView: View {
     private func loadPhoto() async {
         guard let filename = photo.filename else { return }
         
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-        let fileURL = documentsPath?.appendingPathComponent(filename)
+        // Handle videos differently - generate thumbnail
+        if photo.mediaType == "video" {
+            await generateVideoThumbnail(filename: filename)
+        } else {
+            // Load photo as before
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            let fileURL = documentsPath?.appendingPathComponent(filename)
+            
+            if let fileURL = fileURL,
+               let imageData = try? Data(contentsOf: fileURL),
+               let loadedImage = UIImage(data: imageData) {
+                image = loadedImage
+            }
+        }
+    }
+    
+    private func generateVideoThumbnail(filename: String) async {
+        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let videoURL = documentsPath.appendingPathComponent(filename)
         
-        if let fileURL = fileURL,
-           let imageData = try? Data(contentsOf: fileURL),
-           let loadedImage = UIImage(data: imageData) {
-            image = loadedImage
+        let asset = AVAsset(url: videoURL)
+        let imageGenerator = AVAssetImageGenerator(asset: asset)
+        imageGenerator.appliesPreferredTrackTransform = true
+        
+        do {
+            let result = try await imageGenerator.image(at: .zero)
+            await MainActor.run {
+                self.image = UIImage(cgImage: result.image)
+            }
+        } catch {
+            print("Failed to generate video thumbnail: \(error)")
         }
     }
     
@@ -409,11 +501,11 @@ struct CustomPhotoPickerView: View {
                             .font(.system(size: 60))
                             .foregroundColor(.secondary)
                         
-                        Text("No Photos Found")
+                        Text("No Media Found")
                             .font(.title2)
                             .fontWeight(.semibold)
                         
-                        Text("No photos were taken on \(formatDate(tripDay.date))")
+                        Text("No photos or videos were taken on \(formatDate(tripDay.date))")
                             .font(.body)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -436,7 +528,7 @@ struct CustomPhotoPickerView: View {
                     }
                 }
             }
-            .navigationTitle("Photos from \(formatDate(tripDay.date))")
+            .navigationTitle("Media from \(formatDate(tripDay.date))")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -446,7 +538,7 @@ struct CustomPhotoPickerView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Add \(selectedPhotos.count) Photos") {
+                    Button("Add \(selectedPhotos.count) Media") {
                         onPhotosSelected(selectedPhotos)
                         dismiss()
                     }
@@ -481,12 +573,21 @@ struct CustomPhotoPickerView: View {
         options.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@", dayStart as NSDate, dayEnd as NSDate)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         
-        let fetchResult = PHAsset.fetchAssets(with: .image, options: options)
+        // Fetch images and videos separately since fetchAssets doesn't support arrays
+        let imageFetchResult = PHAsset.fetchAssets(with: PHAssetMediaType.image, options: options)
+        let videoFetchResult = PHAsset.fetchAssets(with: PHAssetMediaType.video, options: options)
         
-        print("CustomPhotoPickerView: Found \(fetchResult.count) photos for this date")
+        print("CustomPhotoPickerView: Found \(imageFetchResult.count) images and \(videoFetchResult.count) videos for this date")
         
         var tempPhotos: [PHAsset] = []
-        fetchResult.enumerateObjects { asset, _, _ in
+        
+        // Add images first
+        imageFetchResult.enumerateObjects { asset, _, _ in
+            tempPhotos.append(asset)
+        }
+        
+        // Add videos
+        videoFetchResult.enumerateObjects { asset, _, _ in
             tempPhotos.append(asset)
         }
         
@@ -607,6 +708,52 @@ struct PhotoAssetView: View {
                     print("Failed to load image for asset: \(self.asset.localIdentifier)")
                 }
             }
+        }
+    }
+}
+
+struct VideoPlayerView: View {
+    let filename: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+    
+    var body: some View {
+        NavigationView {
+            ZStack {
+                if let player = player {
+                    VideoPlayer(player: player)
+                        .ignoresSafeArea()
+                } else {
+                    ProgressView("Loading video...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .navigationTitle("Video Player")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .onAppear {
+            loadVideo()
+        }
+        .onDisappear {
+            player?.pause()
+            player = nil
+        }
+    }
+    
+    private func loadVideo() {
+        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let videoURL = documentsPath.appendingPathComponent(filename)
+        
+        if FileManager.default.fileExists(atPath: videoURL.path) {
+            player = AVPlayer(url: videoURL)
+            player?.play()
         }
     }
 }

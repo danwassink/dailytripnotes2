@@ -11,6 +11,7 @@
         <attribute name="createdDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="filename" optional="YES" attributeType="String"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="mediaType" optional="YES" attributeType="String" defaultValueString="photo"/>
         <attribute name="order" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="photoDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="tripDay" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="TripDay" inverseName="photos" inverseEntity="TripDay"/>

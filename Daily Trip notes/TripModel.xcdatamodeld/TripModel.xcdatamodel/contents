@@ -6,6 +6,15 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <relationship name="tripDay" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="TripDay" inverseName="journalEntry" inverseEntity="TripDay"/>
     </entity>
+    <entity name="Photo" representedClassName="Photo" syncable="YES" codeGenerationType="class">
+        <attribute name="caption" optional="YES" attributeType="String"/>
+        <attribute name="createdDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="filename" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="order" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="photoDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="tripDay" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="TripDay" inverseName="photos" inverseEntity="TripDay"/>
+    </entity>
     <entity name="Trip" representedClassName="Trip" syncable="YES" codeGenerationType="class">
         <attribute name="createdDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="desc" optional="YES" attributeType="String"/>
@@ -20,6 +29,7 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="order" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <relationship name="journalEntry" optional="YES" maxCount="1" deletionRule="Cascade" destinationEntity="JournalEntry" inverseName="tripDay" inverseEntity="JournalEntry"/>
+        <relationship name="photos" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Photo" inverseName="tripDay" inverseEntity="Photo"/>
         <relationship name="trip" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Trip" inverseName="tripDays" inverseEntity="Trip"/>
     </entity>
 </model>

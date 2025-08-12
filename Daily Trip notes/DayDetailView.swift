@@ -533,9 +533,13 @@ struct CustomPhotoPickerView: View {
                                     if !isAlreadyAdded {
                                         if selectedPhotos.contains(asset) {
                                             selectedPhotos.removeAll { $0.localIdentifier == asset.localIdentifier }
+                                            print("CustomPhotoPickerView: Removed asset \(asset.localIdentifier) from selection")
                                         } else {
                                             selectedPhotos.append(asset)
+                                            print("CustomPhotoPickerView: Added asset \(asset.localIdentifier) to selection")
                                         }
+                                    } else {
+                                        print("CustomPhotoPickerView: Blocked selection of already added asset \(asset.localIdentifier)")
                                     }
                                 }
                             }
@@ -569,9 +573,16 @@ struct CustomPhotoPickerView: View {
         }
         .onChange(of: photos) { _ in
             // Remove any already added photos from selection when photos change
+            let beforeCount = selectedPhotos.count
             selectedPhotos.removeAll { asset in
-                isPhotoAlreadyAdded(asset)
+                let isAlready = isPhotoAlreadyAdded(asset)
+                if isAlready {
+                    print("CustomPhotoPickerView: onChange - Removing already added asset \(asset.localIdentifier) from selection")
+                }
+                return isAlready
             }
+            let afterCount = selectedPhotos.count
+            print("CustomPhotoPickerView: onChange - Selection count changed from \(beforeCount) to \(afterCount)")
         }
     }
     
@@ -586,17 +597,11 @@ struct CustomPhotoPickerView: View {
     }
     
     private func isPhotoAlreadyAdded(_ asset: PHAsset) -> Bool {
-        // Check if this photo is already added using a hybrid approach
-        // 1. First try identifier matching (for new photos with assetIdentifier)
-        // 2. Fall back to date matching (for existing photos without assetIdentifier)
+        // Check if this photo is already added using ONLY photo ID matching
+        // This is much more reliable than date comparison
         
         print("CustomPhotoPickerView: Checking if asset with identifier \(asset.localIdentifier) is already added")
         print("CustomPhotoPickerView: TripDay has \(tripDay.photos?.count ?? 0) photos")
-        
-        guard let creationDate = asset.creationDate else { 
-            print("CustomPhotoPickerView: Asset has no creation date")
-            return false 
-        }
         
         for (index, photo) in (tripDay.photos ?? []).enumerated() {
             guard let coreDataPhoto = photo as? Photo else { 
@@ -608,23 +613,10 @@ struct CustomPhotoPickerView: View {
             print("  - filename: \(coreDataPhoto.filename ?? "nil")")
             print("  - assetIdentifier: \(coreDataPhoto.assetIdentifier ?? "nil")")
             
-            // Strategy 1: Check if this photo was saved from the same PHAsset by comparing identifiers
+            // Only check if this photo was saved from the same PHAsset by comparing identifiers
             if let storedIdentifier = coreDataPhoto.assetIdentifier {
                 if storedIdentifier == asset.localIdentifier {
                     print("CustomPhotoPickerView: ✅ Duplicate detected by asset identifier match!")
-                    return true
-                }
-            }
-            
-            // Strategy 2: Fall back to date matching for existing photos without assetIdentifier
-            if coreDataPhoto.assetIdentifier == nil, let photoDate = coreDataPhoto.photoDate {
-                let timeDifference = abs(photoDate.timeIntervalSince(creationDate))
-                print("  - photoDate: \(photoDate.description)")
-                print("  - photoDate difference: \(timeDifference)s")
-                
-                // Use 4-hour tolerance for existing photos (more lenient since we're falling back)
-                if timeDifference <= 14400.0 { // 4 hours = 14400 seconds
-                    print("CustomPhotoPickerView: ✅ Duplicate detected by photoDate fallback - difference: \(timeDifference)s")
                     return true
                 }
             }

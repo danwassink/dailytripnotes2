@@ -578,19 +578,34 @@ struct CustomPhotoPickerView: View {
     
     private func isPhotoAlreadyAdded(_ asset: PHAsset) -> Bool {
         // Check if this photo is already added using multiple strategies
-        guard let creationDate = asset.creationDate else { return false }
+        guard let creationDate = asset.creationDate else { 
+            print("CustomPhotoPickerView: Asset has no creation date")
+            return false 
+        }
+        
+        print("CustomPhotoPickerView: Checking if asset with creationDate \(creationDate) is already added")
+        print("CustomPhotoPickerView: TripDay has \(tripDay.photos?.count ?? 0) photos")
         
         // Strategy 1: Compare creation dates with tolerance
-        let tolerance: TimeInterval = 2.0 // Increased tolerance to 2 seconds
+        let tolerance: TimeInterval = 2.0 // 2 seconds tolerance
         
-        for photo in tripDay.photos ?? [] {
-            guard let coreDataPhoto = photo as? Photo else { continue }
+        for (index, photo) in (tripDay.photos ?? []).enumerated() {
+            guard let coreDataPhoto = photo as? Photo else { 
+                print("CustomPhotoPickerView: Photo \(index) is not a Photo entity")
+                continue 
+            }
+            
+            print("CustomPhotoPickerView: Checking Photo \(index):")
+            print("  - filename: \(coreDataPhoto.filename ?? "nil")")
+            print("  - photoDate: \(coreDataPhoto.photoDate?.description ?? "nil")")
+            print("  - createdDate: \(coreDataPhoto.createdDate?.description ?? "nil")")
             
             // Check photoDate if available
             if let photoDate = coreDataPhoto.photoDate {
                 let timeDifference = abs(photoDate.timeIntervalSince(creationDate))
+                print("  - photoDate difference: \(timeDifference)s")
                 if timeDifference <= tolerance {
-                    print("CustomPhotoPickerView: Duplicate detected by photoDate - difference: \(timeDifference)s")
+                    print("CustomPhotoPickerView: ✅ Duplicate detected by photoDate - difference: \(timeDifference)s")
                     return true
                 }
             }
@@ -598,32 +613,32 @@ struct CustomPhotoPickerView: View {
             // Strategy 2: Check createdDate if available
             if let createdDate = coreDataPhoto.createdDate {
                 let timeDifference = abs(createdDate.timeIntervalSince(creationDate))
+                print("  - createdDate difference: \(timeDifference)s")
                 if timeDifference <= tolerance {
-                    print("CustomPhotoPickerView: Duplicate detected by createdDate - difference: \(timeDifference)s")
+                    print("CustomPhotoPickerView: ✅ Duplicate detected by createdDate - difference: \(timeDifference)s")
                     return true
                 }
             }
         }
         
         // Strategy 3: Check if we have multiple photos with very similar timestamps
-        // This catches cases where the same photo might have slightly different timestamps
         let similarPhotos = (tripDay.photos ?? []).compactMap { photo -> Date? in
             guard let coreDataPhoto = photo as? Photo else { return nil }
             return coreDataPhoto.photoDate ?? coreDataPhoto.createdDate
         }
         
-        // If we have multiple photos from the same time period, be more strict
         if similarPhotos.count > 1 {
             let extendedTolerance: TimeInterval = 5.0 // 5 seconds for multiple photos
             for photoDate in similarPhotos {
                 let timeDifference = abs(photoDate.timeIntervalSince(creationDate))
                 if timeDifference <= extendedTolerance {
-                    print("CustomPhotoPickerView: Duplicate detected by extended tolerance - difference: \(timeDifference)s")
+                    print("CustomPhotoPickerView: ✅ Duplicate detected by extended tolerance - difference: \(timeDifference)s")
                     return true
                 }
             }
         }
         
+        print("CustomPhotoPickerView: ❌ No duplicate detected for asset with creationDate \(creationDate)")
         return false
     }
     

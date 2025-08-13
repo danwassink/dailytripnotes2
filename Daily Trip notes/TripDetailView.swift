@@ -3,6 +3,7 @@ import CoreData
 import Photos
 import MapKit
 import Foundation
+import AVFoundation
 
 enum ViewMode {
     case dates
@@ -15,6 +16,7 @@ struct TripDetailView: View {
     @State private var showingAddDay = false
     @State private var showingEditTrip = false
     @State private var showingFeaturePhotoPicker = false
+    @State private var showingTripPhotoPicker = false // New state variable
     @State private var refreshTrigger = false
     @State private var journalRefreshTrigger = false
     @State private var viewMode: ViewMode = .dates
@@ -74,49 +76,78 @@ struct TripDetailView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
-                    
-                    // Feature photo section
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("Feature Photo")
-                                .font(.headline)
-                            Spacer()
-                            Button("Select") {
-                                showingFeaturePhotoPicker = true
-                            }
-                            .foregroundColor(.blue)
+                }
+                .padding(.vertical, 4)
+            }
+            
+            // Feature Photo Card
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Feature Photo")
+                            .font(.headline)
+                        Spacer()
+                        Button("Select") {
+                            showingFeaturePhotoPicker = true
                         }
-                        .padding(.top, 8)
-                        
-                        if let featurePhotoFilename = trip.featurePhotoFilename {
-                            // Show selected feature photo
-                            TripFeaturePhotoView(filename: featurePhotoFilename)
-                                .frame(height: 200)
-                                .frame(maxWidth: .infinity)
-                                .clipped()
-                                .cornerRadius(12)
-                        } else {
-                            // Show placeholder when no feature photo is selected
-                            Button(action: {
-                                showingFeaturePhotoPicker = true
-                            }) {
-                                VStack(spacing: 12) {
-                                    Image(systemName: "photo.badge.plus")
-                                        .font(.system(size: 40))
-                                        .foregroundColor(.blue)
-                                    Text("Select a feature photo")
-                                        .font(.subheadline)
-                                        .foregroundColor(.blue)
-                                }
-                                .frame(height: 200)
-                                .frame(maxWidth: .infinity)
-                                .background(Color(.systemGray6))
-                                .cornerRadius(12)
+                        .foregroundColor(.blue)
+                    }
+                    
+                    if let featurePhotoFilename = trip.featurePhotoFilename {
+                        // Show selected feature photo
+                        TripFeaturePhotoView(filename: featurePhotoFilename)
+                            .frame(height: 200)
+                            .frame(maxWidth: .infinity)
+                            .clipped()
+                            .cornerRadius(12)
+                    } else {
+                        // Show placeholder when no feature photo is selected
+                        Button(action: {
+                            showingFeaturePhotoPicker = true
+                        }) {
+                            VStack(spacing: 12) {
+                                Image(systemName: "photo.badge.plus")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.blue)
+                                Text("Select a feature photo")
+                                    .font(.subheadline)
+                                    .foregroundColor(.blue)
                             }
+                            .frame(height: 200)
+                            .frame(maxWidth: .infinity)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
                         }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(16)
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
+                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+            }
+            
+            // Add Photos to Trip Days Card
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Add Photos to Trip Days")
+                            .font(.headline)
+                        Spacer()
+                        Button("Add Photos") {
+                            showingTripPhotoPicker = true
+                        }
+                        .foregroundColor(.blue)
+                    }
+                    
+                    Text("Add multiple photos that will be automatically distributed to the appropriate trip days based on their creation date.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .padding(16)
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
+                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
             }
             
             // View Mode Selector
@@ -178,6 +209,9 @@ struct TripDetailView: View {
             TripFeaturePhotoPickerView(trip: trip, onPhotoSelected: { selectedPhoto in
                 setFeaturePhoto(selectedPhoto)
             })
+        }
+        .sheet(isPresented: $showingTripPhotoPicker) {
+            TripPhotoPickerView(trip: trip)
         }
         .onChange(of: showingEditTrip) { _, isShowing in
             if !isShowing {
@@ -591,31 +625,44 @@ struct TripPhotoThumbnailView: View {
         
         print("TripPhotoThumbnailView: Loading photo with filename: \(filename)")
         
-        // Check if this is a temporary photo from PHAsset
+        // First try to load from assetIdentifier if available
+        if let assetIdentifier = photo.assetIdentifier {
+            print("TripPhotoThumbnailView: Loading from assetIdentifier: \(assetIdentifier)")
+            await loadPhotoFromPHAsset(assetIdentifier)
+            return
+        }
+        
+        // Check if this is a temporary photo from PHAsset (old format)
         if filename.hasPrefix("temp_") {
-            print("TripPhotoThumbnailView: Loading from PHAsset")
-            await loadPhotoFromPHAsset(filename)
+            print("TripPhotoThumbnailView: Loading from PHAsset (temp_ format)")
+            let assetIdentifier = String(filename.dropFirst(5)) // Remove "temp_" prefix
+            await loadPhotoFromPHAsset(assetIdentifier)
+            return
+        }
+        
+        // Try loading from documents directory
+        print("TripPhotoThumbnailView: Loading from documents directory")
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        let fileURL = documentsPath?.appendingPathComponent(filename)
+        
+        if let fileURL = fileURL,
+           let imageData = try? Data(contentsOf: fileURL),
+           let loadedImage = UIImage(data: imageData) {
+            print("TripPhotoThumbnailView: Successfully loaded image from documents")
+            image = loadedImage
         } else {
-            print("TripPhotoThumbnailView: Loading from documents directory")
-            // Load from documents directory
-            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-            let fileURL = documentsPath?.appendingPathComponent(filename)
-            
-            if let fileURL = fileURL,
-               let imageData = try? Data(contentsOf: fileURL),
-               let loadedImage = UIImage(data: imageData) {
-                print("TripPhotoThumbnailView: Successfully loaded image from documents")
-                image = loadedImage
-            } else {
-                print("TripPhotoThumbnailView: Failed to load image from documents")
+            print("TripPhotoThumbnailView: Failed to load image from documents")
+            // Try to extract asset identifier from filename if it contains one
+            if filename.contains(":") {
+                let assetIdentifier = filename
+                print("TripPhotoThumbnailView: Trying to load from filename as asset identifier: \(assetIdentifier)")
+                await loadPhotoFromPHAsset(assetIdentifier)
             }
         }
     }
     
-    private func loadPhotoFromPHAsset(_ filename: String) async {
-        // Extract the actual PHAsset localIdentifier
-        let assetIdentifier = String(filename.dropFirst(5)) // Remove "temp_" prefix
-        print("TripPhotoThumbnailView: Extracted asset identifier: \(assetIdentifier)")
+    private func loadPhotoFromPHAsset(_ assetIdentifier: String) async {
+        print("TripPhotoThumbnailView: Loading from asset identifier: \(assetIdentifier)")
         
         // Fetch the PHAsset
         let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
@@ -626,32 +673,39 @@ struct TripPhotoThumbnailView: View {
         
         print("TripPhotoThumbnailView: Found PHAsset, requesting image")
         
-        // Load the thumbnail with more flexible options
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .opportunistic // More flexible than fastFormat
-        options.isNetworkAccessAllowed = true // Allow network access for iCloud photos
-        options.resizeMode = .fast // Use fast resize mode
+        // Try multiple approaches to load the image
+        await loadPhotoWithMultipleAttempts(asset: asset)
+    }
+    
+    private func loadPhotoWithMultipleAttempts(asset: PHAsset) async {
+        // Attempt 1: Fast thumbnail with opportunistic delivery
+        let fastOptions = PHImageRequestOptions()
+        fastOptions.deliveryMode = .opportunistic
+        fastOptions.isNetworkAccessAllowed = true
+        fastOptions.resizeMode = .fast
         
-        let targetSize = CGSize(width: 100, height: 100)
+        let targetSize = CGSize(width: 80, height: 80) // 2x for retina
         
         await withCheckedContinuation { continuation in
             PHImageManager.default().requestImage(
                 for: asset,
                 targetSize: targetSize,
                 contentMode: .aspectFill,
-                options: options
+                options: fastOptions
             ) { image, info in
                 DispatchQueue.main.async {
                     if let image = image {
-                        print("TripPhotoThumbnailView: Successfully loaded image from PHAsset")
+                        print("TripPhotoThumbnailView: Successfully loaded image with fast method")
                         self.image = image
-                    } else {
-                        print("TripPhotoThumbnailView: Failed to load image from PHAsset")
-                        // Try fallback method with different options
-                        self.loadPhotoWithFallback(asset: asset)
+                        continuation.resume()
+                        return
                     }
+                    
+                    // Attempt 2: Try with different options
+                    print("TripPhotoThumbnailView: Fast method failed, trying fallback")
+                    self.loadPhotoWithFallback(asset: asset)
+                    continuation.resume()
                 }
-                continuation.resume()
             }
         }
     }
@@ -675,7 +729,7 @@ struct TripPhotoThumbnailView: View {
                 if let image = image {
                     print("TripPhotoThumbnailView: Fallback method succeeded")
                     // Scale down the full image to thumbnail size
-                    let thumbnailSize = CGSize(width: 100, height: 100)
+                    let thumbnailSize = CGSize(width: 80, height: 80) // Match the target size
                     UIGraphicsBeginImageContextWithOptions(thumbnailSize, false, 0.0)
                     image.draw(in: CGRect(origin: .zero, size: thumbnailSize))
                     let thumbnail = UIGraphicsGetImageFromCurrentImageContext()
@@ -684,7 +738,36 @@ struct TripPhotoThumbnailView: View {
                     self.image = thumbnail
                 } else {
                     print("TripPhotoThumbnailView: Fallback method also failed")
-                    // Show a placeholder or error state
+                    // Try one more approach with different options
+                    self.loadPhotoWithFinalAttempt(asset: asset)
+                }
+            }
+        }
+    }
+    
+    private func loadPhotoWithFinalAttempt(asset: PHAsset) {
+        print("TripPhotoThumbnailView: Trying final attempt with different options")
+        
+        // Try with synchronous loading and different delivery mode
+        let finalOptions = PHImageRequestOptions()
+        finalOptions.deliveryMode = .fastFormat
+        finalOptions.isNetworkAccessAllowed = true
+        finalOptions.isSynchronous = true
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: CGSize(width: 80, height: 80),
+            contentMode: .aspectFill,
+            options: finalOptions
+        ) { image, info in
+            DispatchQueue.main.async {
+                if let image = image {
+                    print("TripPhotoThumbnailView: Final attempt succeeded")
+                    self.image = image
+                } else {
+                    print("TripPhotoThumbnailView: All attempts failed")
+                    // At this point, we've tried everything - show a placeholder
+                    // The placeholder is already shown by the ZStack when image is nil
                 }
             }
         }
@@ -883,6 +966,425 @@ struct PhotoAnnotation: Identifiable {
     let title: String
     let subtitle: String
     let photo: Photo
+}
+
+// MARK: - Trip Photo Picker View
+struct TripPhotoPickerView: View {
+    let trip: Trip
+    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.dismiss) private var dismiss
+    
+    @State private var photos: [PHAsset] = []
+    @State private var selectedPhotos: [PHAsset] = []
+    @State private var isLoading = true
+    @State private var hasPhotoLibraryAccess = false
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                if isLoading {
+                    ProgressView("Loading photos...")
+                } else if !hasPhotoLibraryAccess {
+                    Text("Photo Library Access Denied")
+                        .foregroundColor(.red)
+                        .padding()
+                    Text("Please enable photo access in Settings to add photos.")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                } else if photos.isEmpty {
+                    Text("No photos found for this trip's dates.")
+                        .foregroundColor(.gray)
+                        .padding()
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) {
+                            ForEach(photos, id: \.localIdentifier) { asset in
+                                TripPhotoAssetView(
+                                    asset: asset,
+                                    isSelected: selectedPhotos.contains(where: { $0.localIdentifier == asset.localIdentifier }),
+                                    isDisabled: isPhotoAlreadyAdded(asset)
+                                ) {
+                                    if isPhotoAlreadyAdded(asset) {
+                                        // Do nothing if already added
+                                    } else if selectedPhotos.contains(where: { $0.localIdentifier == asset.localIdentifier }) {
+                                        selectedPhotos.removeAll(where: { $0.localIdentifier == asset.localIdentifier })
+                                    } else {
+                                        selectedPhotos.append(asset)
+                                    }
+                                }
+                            }
+                        }
+                        .padding()
+                    }
+                }
+            }
+            .navigationTitle("Add Trip Photos")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Add (\(selectedPhotos.count))") {
+                        addSelectedPhotos()
+                    }
+                    .disabled(selectedPhotos.isEmpty)
+                }
+            }
+            .onAppear(perform: loadPhotos)
+        }
+    }
+    
+    private func checkPhotoLibraryPermission() {
+        PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+            DispatchQueue.main.async {
+                self.hasPhotoLibraryAccess = status == .authorized
+                if status == .authorized {
+                    loadPhotos()
+                } else {
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+    
+    private func loadPhotos() {
+        isLoading = true
+        hasPhotoLibraryAccess = false
+        
+        PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+            DispatchQueue.main.async {
+                self.hasPhotoLibraryAccess = status == .authorized
+                guard status == .authorized else {
+                    self.isLoading = false
+                    return
+                }
+                
+                let fetchOptions = PHFetchOptions()
+                fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+                
+                var allAssets: [PHAsset] = []
+                
+                // Fetch images
+                let imageAssets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+                imageAssets.enumerateObjects { (asset, _, _) in
+                    if let creationDate = asset.creationDate,
+                       let startDate = trip.startDate,
+                       let endDate = trip.endDate,
+                       creationDate >= startDate && creationDate <= endDate.addingTimeInterval(24*60*60) {
+                        allAssets.append(asset)
+                    }
+                }
+                
+                // Fetch videos
+                let videoAssets = PHAsset.fetchAssets(with: .video, options: fetchOptions)
+                videoAssets.enumerateObjects { (asset, _, _) in
+                    if let creationDate = asset.creationDate,
+                       let startDate = trip.startDate,
+                       let endDate = trip.endDate,
+                       creationDate >= startDate && creationDate <= endDate.addingTimeInterval(24*60*60) {
+                        allAssets.append(asset)
+                    }
+                }
+                
+                self.photos = allAssets.sorted { ($0.creationDate ?? Date.distantPast) > ($1.creationDate ?? Date.distantPast) }
+                self.isLoading = false
+                
+                // Remove any already added photos from selection when photos load
+                self.selectedPhotos.removeAll { asset in
+                    self.isPhotoAlreadyAdded(asset)
+                }
+            }
+        }
+    }
+    
+    private func isPhotoAlreadyAdded(_ asset: PHAsset) -> Bool {
+        guard let tripDays = trip.tripDays as? Set<TripDay> else { return false }
+        
+        for tripDay in tripDays {
+            if let photosInDay = tripDay.photos as? Set<Photo> {
+                for coreDataPhoto in photosInDay {
+                    if let storedIdentifier = coreDataPhoto.assetIdentifier {
+                        if storedIdentifier == asset.localIdentifier {
+                            return true
+                        }
+                    }
+                }
+            }
+        }
+        return false
+    }
+    
+    private func addSelectedPhotos() {
+        guard !selectedPhotos.isEmpty else { return }
+        
+        Task {
+            var results: [PhotoProcessingResult] = []
+            
+            for asset in selectedPhotos {
+                let result = await processPhotoAsset(asset)
+                results.append(result)
+            }
+            
+            await MainActor.run {
+                // Show results and dismiss
+                dismiss()
+                NotificationCenter.default.post(name: .photosAddedToTripDay, object: nil)
+            }
+        }
+    }
+    
+    private func processPhotoAsset(_ asset: PHAsset) async -> PhotoProcessingResult {
+        guard let creationDate = asset.creationDate else {
+            return PhotoProcessingResult(asset: asset, success: false, message: "No creation date", assignedDay: nil)
+        }
+        
+        // Find the correct trip day for this photo
+        guard let tripDays = trip.tripDays as? Set<TripDay> else {
+            return PhotoProcessingResult(asset: asset, success: false, message: "No trip days found", assignedDay: nil)
+        }
+        
+        let sortedTripDays = tripDays.sorted { ($0.date ?? Date.distantPast) < ($1.date ?? Date.distantPast) }
+        
+        guard let tripDay = sortedTripDays.first(where: { day in
+            guard let dayDate = day.date else { return false }
+            let calendar = Calendar.current
+            return calendar.isDate(creationDate, inSameDayAs: dayDate)
+        }) else {
+            return PhotoProcessingResult(asset: asset, success: false, message: "No matching trip day found", assignedDay: nil)
+        }
+        
+        // Check for duplicates again right before saving (race condition prevention)
+        if isPhotoAlreadyAdded(asset) {
+            return PhotoProcessingResult(asset: asset, success: false, message: "Already added", assignedDay: tripDay)
+        }
+        
+        // Save the photo
+        do {
+            let photo = Photo(context: viewContext)
+            photo.id = UUID()
+            photo.filename = "photo_\(UUID().uuidString).jpg"
+            photo.mediaType = asset.mediaType == .video ? "video" : "photo"
+            photo.caption = ""
+            photo.createdDate = Date()
+            photo.assetIdentifier = asset.localIdentifier
+            photo.photoDate = creationDate
+            photo.order = Int32((tripDay.photos?.count ?? 0))
+            photo.tripDay = tripDay
+            
+            // Save the actual media file
+            let fileManager = FileManager.default
+            let documentsDirectory = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let fileURL = documentsDirectory.appendingPathComponent(photo.filename!)
+            
+            if asset.mediaType == .video {
+                let videoOptions = PHVideoRequestOptions()
+                videoOptions.deliveryMode = .highQualityFormat
+                videoOptions.isNetworkAccessAllowed = true
+                
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    PHImageManager.default().requestAVAsset(forVideo: asset, options: videoOptions) { avAsset, audioMix, info in
+                        if let urlAsset = avAsset as? AVURLAsset {
+                            do {
+                                let videoData = try Data(contentsOf: urlAsset.url)
+                                try videoData.write(to: fileURL)
+                                continuation.resume(returning: ())
+                            } catch {
+                                print("Error saving video: \(error.localizedDescription)")
+                                continuation.resume(returning: ())
+                            }
+                        } else {
+                            print("Error loading video asset")
+                            continuation.resume(returning: ())
+                        }
+                    }
+                }
+            } else {
+                let imageOptions = PHImageRequestOptions()
+                imageOptions.deliveryMode = .highQualityFormat
+                imageOptions.isNetworkAccessAllowed = true
+                imageOptions.isSynchronous = false
+                
+                await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+                    PHImageManager.default().requestImage(
+                        for: asset,
+                        targetSize: PHImageManagerMaximumSize,
+                        contentMode: .aspectFit,
+                        options: imageOptions
+                    ) { image, info in
+                        if let image = image,
+                           let imageData = image.jpegData(compressionQuality: 0.8) {
+                            continuation.resume(returning: imageData)
+                        } else {
+                            continuation.resume(returning: Data())
+                        }
+                    }
+                }
+            }
+            
+            try viewContext.save()
+            
+            return PhotoProcessingResult(
+                asset: asset,
+                success: true,
+                message: "Added to \(tripDay.date?.formatted(date: .abbreviated, time: .omitted) ?? "trip day")",
+                assignedDay: tripDay
+            )
+        } catch {
+            print("Error saving photo: \(error.localizedDescription)")
+            return PhotoProcessingResult(asset: asset, success: false, message: "Save failed: \(error.localizedDescription)", assignedDay: nil)
+        }
+    }
+}
+
+// MARK: - Supporting Models
+struct PhotoProcessingResult {
+    let asset: PHAsset
+    let success: Bool
+    let message: String
+    let assignedDay: TripDay?
+}
+
+enum PhotoLoadingError: Error, LocalizedError {
+    case failedToLoad
+    
+    var errorDescription: String? {
+        switch self {
+        case .failedToLoad:
+            return "Failed to load photo"
+        }
+    }
+}
+
+// MARK: - Trip Photo Asset View
+struct TripPhotoAssetView: View {
+    let asset: PHAsset
+    let isSelected: Bool
+    let isDisabled: Bool
+    let onTap: () -> Void
+    
+    @State private var image: UIImage?
+    @State private var isLoading = true
+    @State private var hasError = false
+    
+    var body: some View {
+        ZStack {
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 100, height: 100)
+                    .clipped()
+                    .cornerRadius(8)
+                    .overlay(
+                        // Gray overlay for disabled photos
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isDisabled ? Color.black.opacity(0.6) : Color.clear)
+                    )
+            } else if hasError {
+                // Show error state
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemRed).opacity(0.3))
+                    .frame(width: 100, height: 100)
+                    .overlay(
+                        VStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundColor(.red)
+                                .font(.caption)
+                            Text("Error")
+                                .font(.caption2)
+                                .foregroundColor(.red)
+                        }
+                    )
+            } else {
+                // Show loading state
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray5))
+                    .frame(width: 100, height: 100)
+                    .overlay(
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    )
+            }
+            
+            // Checkmark indicators - prioritize disabled state over selection
+            if isDisabled {
+                // Already added indicator (green checkmark)
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.white)
+                            .background(Color.green)
+                            .clipShape(Circle())
+                            .font(.title2)
+                    }
+                    Spacer()
+                }
+                    .padding(4)
+            } else if isSelected {
+                // Selection indicator (blue checkmark) - only show if not disabled
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.white)
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                            .font(.title2)
+                    }
+                    Spacer()
+                }
+                    .padding(4)
+            } else {
+                // Plus symbol for selectable photos (not disabled, not selected)
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(.white)
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                            .font(.title2)
+                    }
+                    Spacer()
+                }
+                    .padding(4)
+            }
+        }
+        .onTapGesture(perform: onTap)
+        .onAppear {
+            loadThumbnail()
+        }
+    }
+    
+    private func loadThumbnail() {
+        isLoading = true
+        hasError = false
+        
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.isNetworkAccessAllowed = true
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: CGSize(width: 100, height: 100),
+            contentMode: .aspectFill,
+            options: options
+        ) { image, info in
+            DispatchQueue.main.async {
+                if let image = image {
+                    self.image = image
+                    self.isLoading = false
+                } else {
+                    self.hasError = true
+                    self.isLoading = false
+                }
+            }
+        }
+    }
 }
 
 #Preview {

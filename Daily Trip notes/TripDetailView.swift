@@ -8,6 +8,7 @@ import AVFoundation
 enum ViewMode {
     case dates
     case map
+    case photos
 }
 
 struct TripDetailView: View {
@@ -15,7 +16,6 @@ struct TripDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @State private var showingAddDay = false
     @State private var showingEditTrip = false
-    @State private var showingFeaturePhotoPicker = false
     @State private var showingTripPhotoPicker = false // New state variable
     @State private var refreshTrigger = false
     @State private var journalRefreshTrigger = false
@@ -80,50 +80,24 @@ struct TripDetailView: View {
                 .padding(.vertical, 4)
             }
             
-            // Feature Photo Card
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
+            // Feature Photo Display (Read-only)
+            if let featurePhotoFilename = trip.featurePhotoFilename {
+                Section {
+                    VStack(alignment: .leading, spacing: 12) {
                         Text("Feature Photo")
                             .font(.headline)
-                        Spacer()
-                        Button("Select") {
-                            showingFeaturePhotoPicker = true
-                        }
-                        .foregroundColor(.blue)
-                    }
-                    
-                    if let featurePhotoFilename = trip.featurePhotoFilename {
-                        // Show selected feature photo
+                        
                         TripFeaturePhotoView(filename: featurePhotoFilename)
                             .frame(height: 200)
                             .frame(maxWidth: .infinity)
                             .clipped()
                             .cornerRadius(12)
-                    } else {
-                        // Show placeholder when no feature photo is selected
-                        Button(action: {
-                            showingFeaturePhotoPicker = true
-                        }) {
-                            VStack(spacing: 12) {
-                                Image(systemName: "photo.badge.plus")
-                                    .font(.system(size: 40))
-                                    .foregroundColor(.blue)
-                                Text("Select a feature photo")
-                                    .font(.subheadline)
-                                    .foregroundColor(.blue)
-                            }
-                            .frame(height: 200)
-                            .frame(maxWidth: .infinity)
-                            .background(Color(.systemGray6))
-                            .cornerRadius(12)
-                        }
                     }
+                    .padding(16)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(12)
+                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
                 }
-                .padding(16)
-                .background(Color(.systemBackground))
-                .cornerRadius(12)
-                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
             }
             
             // Add Photos to Trip Days Card
@@ -155,6 +129,7 @@ struct TripDetailView: View {
                 Picker("View Mode", selection: $viewMode) {
                     Text("Dates").tag(ViewMode.dates)
                     Text("Map").tag(ViewMode.map)
+                    Text("Photos").tag(ViewMode.photos)
                 }
                 .pickerStyle(SegmentedPickerStyle())
                 .padding(.vertical, 8)
@@ -176,11 +151,15 @@ struct TripDetailView: View {
                     .onDelete(perform: deleteDays)
                 }
             }
-            } else {
+            } else if viewMode == .map {
                 Section("Trip Map") {
                     TripMapView(trip: trip)
                         .frame(height: 400)
                         .listRowInsets(EdgeInsets())
+                }
+            } else if viewMode == .photos {
+                Section("Trip Photos") {
+                    TripPhotosView(trip: trip)
                 }
             }
         }
@@ -204,11 +183,6 @@ struct TripDetailView: View {
         }
         .sheet(isPresented: $showingEditTrip) {
             EditTripView(trip: trip)
-        }
-        .sheet(isPresented: $showingFeaturePhotoPicker) {
-            TripFeaturePhotoPickerView(trip: trip, onPhotoSelected: { selectedPhoto in
-                setFeaturePhoto(selectedPhoto)
-            })
         }
         .sheet(isPresented: $showingTripPhotoPicker) {
             TripPhotoPickerView(trip: trip)
@@ -256,65 +230,9 @@ struct TripDetailView: View {
         }
     }
     
-    private func setFeaturePhoto(_ photo: Photo) {
-        // If this is a temporary photo from PHAsset (using localIdentifier as filename)
-        if photo.filename?.hasPrefix("temp_") == true || photo.filename?.contains(":") == true {
-            // This is a PHAsset, we need to copy the actual image data
-            copyPhotoFromPHAsset(photo)
-        } else {
-            // This is an existing photo, just set the filename
-            trip.featurePhotoFilename = photo.filename
-            
-            do {
-                try viewContext.save()
-                refreshTrigger.toggle() // Force refresh to show the new feature photo
-            } catch {
-                print("Error setting feature photo: \(error)")
-            }
-        }
-    }
+
     
-    private func copyPhotoFromPHAsset(_ photo: Photo) {
-        guard let localIdentifier = photo.filename else { return }
-        
-        // Extract the actual PHAsset localIdentifier (remove temp_ prefix if present)
-        let assetIdentifier = localIdentifier.hasPrefix("temp_") ? String(localIdentifier.dropFirst(5)) : localIdentifier
-        
-        // Fetch the PHAsset
-        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
-        guard let asset = fetchResult.firstObject else { return }
-        
-        // Load the image data
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .highQualityFormat
-        options.isNetworkAccessAllowed = false
-        options.isSynchronous = false
-        
-        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
-            guard let imageData = data else { return }
-            
-            // Generate a unique filename
-            let filename = "feature_photo_\(UUID().uuidString).jpg"
-            
-            // Save to documents directory
-            if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-                let photoURL = documentsPath.appendingPathComponent(filename)
-                try? imageData.write(to: photoURL)
-                
-                // Update the trip with the new filename
-                DispatchQueue.main.async {
-                    self.trip.featurePhotoFilename = filename
-                    
-                    do {
-                        try self.viewContext.save()
-                        self.refreshTrigger.toggle() // Force refresh to show the new feature photo
-                    } catch {
-                        print("Error setting feature photo: \(error)")
-                    }
-                }
-            }
-        }
-    }
+
     
     private func generateDaysIfNeeded() {
         guard let startDate = trip.startDate,
@@ -1382,6 +1300,91 @@ struct TripPhotoAssetView: View {
                     self.hasError = true
                     self.isLoading = false
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Trip Photos View
+struct TripPhotosView: View {
+    let trip: Trip
+    
+    var sortedDays: [TripDay] {
+        trip.tripDays?.allObjects as? [TripDay] ?? []
+    }
+    
+    var body: some View {
+        if sortedDays.isEmpty {
+            Text("No photos added yet")
+                .foregroundColor(.secondary)
+                .italic()
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding()
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 20) {
+                    ForEach(sortedDays.sorted { $0.order < $1.order }) { day in
+                        DayPhotosSection(day: day)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+}
+
+struct DayPhotosSection: View {
+    let day: TripDay
+    
+    var dayPhotos: [Photo] {
+        day.photos?.allObjects as? [Photo] ?? []
+    }
+    
+    var body: some View {
+        if !dayPhotos.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                // Day header
+                HStack {
+                    Text(day.date?.formatted(date: .complete, time: .omitted) ?? "Unknown Date")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    
+                    Spacer()
+                    
+                    Text("\(dayPhotos.count) photo\(dayPhotos.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                }
+                
+                // Photos grid
+                PhotosGrid(photos: dayPhotos)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(.systemBackground))
+            .cornerRadius(12)
+            .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        }
+    }
+}
+
+struct PhotosGrid: View {
+    let photos: [Photo]
+    
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+    
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 8) {
+            ForEach(photos.sorted { $0.order < $1.order }) { photo in
+                TripPhotoThumbnailView(photo: photo)
+                    .aspectRatio(1, contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
+                    .cornerRadius(8)
             }
         }
     }

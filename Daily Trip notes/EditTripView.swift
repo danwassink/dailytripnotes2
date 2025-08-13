@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreData
+import Photos
 
 struct EditTripView: View {
     let trip: Trip
@@ -10,6 +11,7 @@ struct EditTripView: View {
     @State private var startDate: Date
     @State private var endDate: Date
     @State private var description: String
+    @State private var showingFeaturePhotoPicker = false
     
     init(trip: Trip) {
         self.trip = trip
@@ -34,6 +36,51 @@ struct EditTripView: View {
                         .lineLimit(3...6)
                 }
                 
+                Section("Feature Photo") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let featurePhotoFilename = trip.featurePhotoFilename {
+                            // Show current feature photo
+                            TripFeaturePhotoView(filename: featurePhotoFilename)
+                                .frame(height: 200)
+                                .frame(maxWidth: .infinity)
+                                .clipped()
+                                .cornerRadius(12)
+                            
+                            HStack {
+                                Button("Change Photo") {
+                                    showingFeaturePhotoPicker = true
+                                }
+                                .foregroundColor(.blue)
+                                
+                                Spacer()
+                                
+                                Button("Remove Photo") {
+                                    removeFeaturePhoto()
+                                }
+                                .foregroundColor(.red)
+                            }
+                        } else {
+                            // Show placeholder when no feature photo is selected
+                            Button(action: {
+                                showingFeaturePhotoPicker = true
+                            }) {
+                                VStack(spacing: 12) {
+                                    Image(systemName: "photo.badge.plus")
+                                        .font(.system(size: 40))
+                                        .foregroundColor(.blue)
+                                    Text("Select a feature photo")
+                                        .font(.subheadline)
+                                        .foregroundColor(.blue)
+                                }
+                                .frame(height: 200)
+                                .frame(maxWidth: .infinity)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(12)
+                            }
+                        }
+                    }
+                }
+                
                 Section("Warning") {
                     Text("Changing trip dates will regenerate all days and may affect existing journal entries.")
                         .font(.caption)
@@ -56,7 +103,62 @@ struct EditTripView: View {
                     .disabled(tripName.isEmpty || endDate <= startDate)
                 }
             }
+            .sheet(isPresented: $showingFeaturePhotoPicker) {
+                TripFeaturePhotoPickerView(trip: trip, onPhotoSelected: { selectedPhoto in
+                    setFeaturePhoto(selectedPhoto)
+                })
+            }
         }
+    }
+    
+    private func setFeaturePhoto(_ photo: Photo) {
+        // If this is a temporary photo from PHAsset (using localIdentifier as filename)
+        if photo.filename?.hasPrefix("temp_") == true || photo.filename?.contains(":") == true {
+            // This is a PHAsset, we need to copy the actual image data
+            copyPhotoFromPHAsset(photo)
+        } else {
+            // This is an existing photo, just set the filename
+            trip.featurePhotoFilename = photo.filename
+        }
+    }
+    
+    private func copyPhotoFromPHAsset(_ photo: Photo) {
+        guard let localIdentifier = photo.filename else { return }
+        
+        // Extract the actual PHAsset localIdentifier (remove temp_ prefix if present)
+        let assetIdentifier = localIdentifier.hasPrefix("temp_") ? String(localIdentifier.dropFirst(5)) : localIdentifier
+        
+        // Fetch the PHAsset
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+        guard let asset = fetchResult.firstObject else { return }
+        
+        // Load the image data
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = false
+        options.isSynchronous = false
+        
+        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
+            guard let imageData = data else { return }
+            
+            // Generate a unique filename
+            let filename = "feature_photo_\(UUID().uuidString).jpg"
+            
+            // Save to documents directory
+            if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                let photoURL = documentsPath.appendingPathComponent(filename)
+                try? imageData.write(to: photoURL)
+                
+                // Update the trip with the new filename
+                DispatchQueue.main.async {
+                    self.trip.featurePhotoFilename = filename
+                }
+            }
+        }
+    }
+    
+    private func removeFeaturePhoto() {
+        trip.featurePhotoFilename = nil
     }
     
     private func saveChanges() {

@@ -51,45 +51,68 @@ struct TripRowView: View {
     let trip: Trip
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(trip.name ?? "Untitled Trip")
-                .font(.headline)
+        HStack(alignment: .top, spacing: 12) {
+            // Feature Photo Thumbnail
+            if let featurePhotoFilename = trip.featurePhotoFilename {
+                TripFeaturePhotoView(filename: featurePhotoFilename)
+                    .frame(width: 60, height: 60)
+                    .clipped()
+                    .cornerRadius(8)
+            } else {
+                // Placeholder when no feature photo
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray5))
+                    .frame(width: 60, height: 60)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.gray)
+                            .font(.title2)
+                    )
+            }
             
-            if let startDate = trip.startDate, let endDate = trip.endDate {
-                Text("\(startDate.formatted(date: .abbreviated, time: .omitted)) - \(endDate.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+            // Trip Information
+            VStack(alignment: .leading, spacing: 8) {
+                Text(trip.name ?? "Untitled Trip")
+                    .font(.headline)
                 
-                // Add day of week information
-                HStack(spacing: 16) {
-                    Text(startDate.formatted(.dateTime.weekday(.abbreviated)))
-                        .font(.caption)
-                        .foregroundColor(.blue)
-                    Text("to")
-                        .font(.caption)
+                if let startDate = trip.startDate, let endDate = trip.endDate {
+                    Text("\(startDate.formatted(date: .abbreviated, time: .omitted)) - \(endDate.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.subheadline)
                         .foregroundColor(.secondary)
-                    Text(endDate.formatted(.dateTime.weekday(.abbreviated)))
+                    
+                    // Add day of week information
+                    HStack(spacing: 16) {
+                        Text(startDate.formatted(.dateTime.weekday(.abbreviated)))
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                        Text("to")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(endDate.formatted(.dateTime.weekday(.abbreviated)))
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                }
+                
+                if let desc = trip.desc, !desc.isEmpty {
+                    Text(desc)
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+                
+                // Show day count
+                if let tripDays = trip.tripDays?.allObjects as? [TripDay] {
+                    let dayCount = tripDays.count
+                    Text("\(dayCount) day\(dayCount == 1 ? "" : "s")")
                         .font(.caption)
                         .foregroundColor(.blue)
                 }
             }
             
-            if let desc = trip.desc, !desc.isEmpty {
-                Text(desc)
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .lineLimit(2)
-            }
-            
-            // Show day count
-            if let tripDays = trip.tripDays?.allObjects as? [TripDay] {
-                let dayCount = tripDays.count
-                Text("\(dayCount) day\(dayCount == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundColor(.blue)
-            }
+            Spacer()
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 8)
     }
 }
 

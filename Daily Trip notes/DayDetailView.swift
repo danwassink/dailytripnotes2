@@ -775,6 +775,20 @@ struct PhotoAssetView: View {
                     Spacer()
                 }
                 .padding(4)
+            } else {
+                // Plus symbol for selectable photos (not disabled, not selected)
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(.white)
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                            .font(.title2)
+                    }
+                    Spacer()
+                }
+                .padding(4)
             }
         }
         .onTapGesture {

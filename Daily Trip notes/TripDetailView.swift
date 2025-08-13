@@ -17,6 +17,7 @@ struct TripDetailView: View {
     @State private var showingAddDay = false
     @State private var showingEditTrip = false
     @State private var showingTripPhotoPicker = false // New state variable
+    @State private var showingContextMenu = false
     @State private var refreshTrigger = false
     @State private var journalRefreshTrigger = false
     @State private var viewMode: ViewMode = .dates
@@ -82,47 +83,21 @@ struct TripDetailView: View {
             
             // Feature Photo Display (Read-only)
             if let featurePhotoFilename = trip.featurePhotoFilename {
-                Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Feature Photo")
-                            .font(.headline)
-                        
-                        TripFeaturePhotoView(filename: featurePhotoFilename)
-                            .frame(height: 200)
-                            .frame(maxWidth: .infinity)
-                            .clipped()
-                            .cornerRadius(12)
-                    }
-                    .padding(16)
-                    .background(Color(.systemBackground))
-                    .cornerRadius(12)
-                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Feature Photo")
+                        .font(.headline)
+                    
+                    TripFeaturePhotoView(filename: featurePhotoFilename)
+                        .frame(height: 200)
+                        .frame(maxWidth: .infinity)
+                        .clipped()
+                        .cornerRadius(12)
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
             
-            // Add Photos to Trip Days Card
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Add Photos to Trip Days")
-                            .font(.headline)
-                        Spacer()
-                        Button("Add Photos") {
-                            showingTripPhotoPicker = true
-                        }
-                        .foregroundColor(.blue)
-                    }
-                    
-                    Text("Add multiple photos that will be automatically distributed to the appropriate trip days based on their creation date.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.leading)
-                }
-                .padding(16)
-                .background(Color(.systemBackground))
-                .cornerRadius(12)
-                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-            }
+
             
             // View Mode Selector
             Section {
@@ -158,9 +133,7 @@ struct TripDetailView: View {
                         .listRowInsets(EdgeInsets())
                 }
             } else if viewMode == .photos {
-                Section("Trip Photos") {
-                    TripPhotosView(trip: trip)
-                }
+                TripPhotosView(trip: trip)
             }
         }
         .navigationTitle("Trip Details")
@@ -172,8 +145,21 @@ struct TripDetailView: View {
                         showingAddDay = true
                     }
                 } else {
-                    Button("Edit") {
-                        showingEditTrip = true
+                    Button(action: {
+                        showingContextMenu = true
+                    }) {
+                        Image(systemName: "ellipsis")
+                    }
+                    .confirmationDialog("Trip Actions", isPresented: $showingContextMenu, titleVisibility: .hidden) {
+                        Button("Edit Trip") {
+                            showingEditTrip = true
+                        }
+                        
+                        Button("Add Photos to Trip") {
+                            showingTripPhotoPicker = true
+                        }
+                        
+                        Button("Cancel", role: .cancel) { }
                     }
                 }
             }
@@ -289,59 +275,59 @@ struct DayRowView: View {
     }
     
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                if let date = tripDay.date {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(date.formatted(date: .abbreviated, time: .omitted))
-                            .font(.headline)
-                        
-                        Text(date.formatted(.dateTime.weekday(.abbreviated)))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let date = tripDay.date {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(date.formatted(date: .abbreviated, time: .omitted))
+                                .font(.headline)
+                            
+                            Text(date.formatted(.dateTime.weekday(.abbreviated)))
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                                .fontWeight(.medium)
+                        }
+                    }
+                    
+                    if let journalEntry = tripDay.journalEntry,
+                       let content = journalEntry.content,
+                       !content.isEmpty {
+                        Text(content)
                             .font(.caption)
-                            .foregroundColor(.blue)
-                            .fontWeight(.medium)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    } else {
+                        Text("No journal entry yet")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .italic()
                     }
                 }
                 
-                if let journalEntry = tripDay.journalEntry,
-                   let content = journalEntry.content,
-                   !content.isEmpty {
-                    Text(content)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                } else {
-                    Text("No journal entry yet")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .italic()
-                }
+                Spacer()
             }
             
-            Spacer()
-            
-            // Photo thumbnails
+            // Photo thumbnails below the text
             if !sortedPhotos.isEmpty {
-                HStack(spacing: 4) {
+                HStack(spacing: 8) {
                     ForEach(Array(sortedPhotos.prefix(3)), id: \.id) { photo in
                         TripPhotoThumbnailView(photo: photo)
-                            .frame(width: 40, height: 40)
+                            .frame(width: 60, height: 60)
+                            .clipped()
+                            .cornerRadius(8)
                     }
                     
                     if sortedPhotos.count > 3 {
                         Text("+\(sortedPhotos.count - 3)")
                             .font(.caption2)
                             .foregroundColor(.secondary)
-                            .frame(width: 40, height: 40)
+                            .frame(width: 60, height: 60)
                             .background(Color(.systemGray6))
-                            .cornerRadius(6)
+                            .cornerRadius(8)
                     }
                 }
             }
-            
-            Image(systemName: "chevron.right")
-                .foregroundColor(.secondary)
-                .font(.caption)
         }
         .padding(.vertical, 4)
         .id(refreshTrigger) // Force refresh when journal entries change
@@ -517,13 +503,11 @@ struct TripPhotoThumbnailView: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 40, height: 40)
                     .clipped()
                     .cornerRadius(6)
             } else {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color(.systemGray5))
-                    .frame(width: 40, height: 40)
                     .overlay(
                         ProgressView()
                             .scaleEffect(0.6)
@@ -765,6 +749,7 @@ struct PhotoAnnotationView: View {
     let annotation: PhotoAnnotation
     @State private var image: UIImage?
     @State private var isLoading = true
+    @State private var showingFullScreenPhoto = false
     
     var body: some View {
         VStack(spacing: 4) {
@@ -811,28 +796,52 @@ struct PhotoAnnotationView: View {
         .onAppear {
             loadPhotoThumbnail()
         }
+        .onTapGesture {
+            showingFullScreenPhoto = true
+        }
+        .sheet(isPresented: $showingFullScreenPhoto) {
+            FullScreenPhotoView(photo: annotation.photo)
+        }
     }
     
     private func loadPhotoThumbnail() {
         guard let filename = annotation.photo.filename else { return }
         
-        // Check if this is a temporary photo from PHAsset
-        if filename.hasPrefix("temp_") || filename.contains(":") {
-            loadPhotoFromPHAsset(filename)
-        } else {
-            loadPhotoFromDocuments(filename)
+        // Handle videos differently - generate thumbnail
+        if annotation.photo.mediaType == "video" {
+            generateVideoThumbnail(filename: filename)
+            return
         }
-    }
-    
-    private func loadPhotoFromDocuments(_ filename: String) {
-        if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let photoURL = documentsPath.appendingPathComponent(filename)
-            if let imageData = try? Data(contentsOf: photoURL),
-               let loadedImage = UIImage(data: imageData) {
-                DispatchQueue.main.async {
-                    self.image = loadedImage
-                    self.isLoading = false
-                }
+        
+        // First try to load from assetIdentifier if available
+        if let assetIdentifier = annotation.photo.assetIdentifier {
+            loadPhotoFromPHAsset(assetIdentifier)
+            return
+        }
+        
+        // Check if this is a temporary photo from PHAsset (old format)
+        if filename.hasPrefix("temp_") {
+            let assetIdentifier = String(filename.dropFirst(5)) // Remove "temp_" prefix
+            loadPhotoFromPHAsset(assetIdentifier)
+            return
+        }
+        
+        // Try loading from documents directory
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        let fileURL = documentsPath?.appendingPathComponent(filename)
+        
+        if let fileURL = fileURL,
+           let imageData = try? Data(contentsOf: fileURL),
+           let loadedImage = UIImage(data: imageData) {
+            DispatchQueue.main.async {
+                self.image = loadedImage
+                self.isLoading = false
+            }
+        } else {
+            // Try to extract asset identifier from filename if it contains one
+            if filename.contains(":") {
+                let assetIdentifier = filename
+                loadPhotoFromPHAsset(assetIdentifier)
             } else {
                 DispatchQueue.main.async {
                     self.isLoading = false
@@ -841,10 +850,7 @@ struct PhotoAnnotationView: View {
         }
     }
     
-    private func loadPhotoFromPHAsset(_ filename: String) {
-        // Extract the actual PHAsset localIdentifier
-        let assetIdentifier = filename.hasPrefix("temp_") ? String(filename.dropFirst(5)) : filename
-        
+    private func loadPhotoFromPHAsset(_ assetIdentifier: String) {
         // Fetch the PHAsset
         let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
         guard let asset = fetchResult.firstObject else { 
@@ -854,11 +860,16 @@ struct PhotoAnnotationView: View {
             return 
         }
         
-        // Load the thumbnail
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .opportunistic
-        options.isNetworkAccessAllowed = true
-        options.resizeMode = .fast
+        // Try multiple approaches to load the image
+        loadPhotoWithMultipleAttempts(asset: asset)
+    }
+    
+    private func loadPhotoWithMultipleAttempts(asset: PHAsset) {
+        // Attempt 1: Fast thumbnail with opportunistic delivery
+        let fastOptions = PHImageRequestOptions()
+        fastOptions.deliveryMode = .opportunistic
+        fastOptions.isNetworkAccessAllowed = true
+        fastOptions.resizeMode = .fast
         
         let targetSize = CGSize(width: 120, height: 120) // 2x for retina
         
@@ -866,13 +877,216 @@ struct PhotoAnnotationView: View {
             for: asset,
             targetSize: targetSize,
             contentMode: .aspectFill,
-            options: options
+            options: fastOptions
+        ) { image, info in
+            DispatchQueue.main.async {
+                if let image = image {
+                    self.image = image
+                    self.isLoading = false
+                } else {
+                    // Try fallback approach
+                    self.loadPhotoWithFallback(asset: asset)
+                }
+            }
+        }
+    }
+    
+    private func loadPhotoWithFallback(asset: PHAsset) {
+        // Attempt 2: High quality with high quality delivery
+        let fallbackOptions = PHImageRequestOptions()
+        fallbackOptions.deliveryMode = .highQualityFormat
+        fallbackOptions.isNetworkAccessAllowed = true
+        fallbackOptions.resizeMode = .exact
+        
+        let targetSize = CGSize(width: 120, height: 120) // 2x for retina
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: .aspectFill,
+            options: fallbackOptions
         ) { image, info in
             DispatchQueue.main.async {
                 if let image = image {
                     self.image = image
                 }
                 self.isLoading = false
+            }
+        }
+    }
+    
+    private func generateVideoThumbnail(filename: String) {
+        // For videos, we'll show a video icon instead of trying to generate thumbnails
+        DispatchQueue.main.async {
+            self.isLoading = false
+        }
+    }
+}
+
+struct FullScreenPhotoView: View {
+    let photo: Photo
+    @Environment(\.dismiss) private var dismiss
+    @State private var image: UIImage?
+    @State private var isLoading = true
+    @State private var showingVideoPlayer = false
+    
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                
+                if let image = image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if isLoading {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .foregroundColor(.white)
+                } else {
+                    VStack(spacing: 16) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 60))
+                            .foregroundColor(.white)
+                        Text("Photo not available")
+                            .foregroundColor(.white)
+                            .font(.headline)
+                    }
+                }
+                
+                // Video indicator and play button
+                if photo.mediaType == "video" {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Button(action: {
+                                showingVideoPlayer = true
+                            }) {
+                                Image(systemName: "play.circle.fill")
+                                    .font(.system(size: 80))
+                                    .foregroundColor(.white)
+                                    .background(Color.blue)
+                                    .clipShape(Circle())
+                            }
+                            .padding(.bottom, 100)
+                            .padding(.trailing, 30)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Photo")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                }
+                
+                if photo.mediaType == "video" {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Play") {
+                            showingVideoPlayer = true
+                        }
+                        .foregroundColor(.white)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingVideoPlayer) {
+            if let filename = photo.filename {
+                VideoPlayerView(filename: filename)
+            }
+        }
+        .task {
+            await loadFullScreenPhoto()
+        }
+    }
+    
+    private func loadFullScreenPhoto() async {
+        guard let filename = photo.filename else { return }
+        
+        // Handle videos differently
+        if photo.mediaType == "video" {
+            await MainActor.run {
+                self.isLoading = false
+            }
+            return
+        }
+        
+        // First try to load from assetIdentifier if available
+        if let assetIdentifier = photo.assetIdentifier {
+            await loadPhotoFromPHAsset(assetIdentifier)
+            return
+        }
+        
+        // Check if this is a temporary photo from PHAsset (old format)
+        if filename.hasPrefix("temp_") {
+            let assetIdentifier = String(filename.dropFirst(5)) // Remove "temp_" prefix
+            await loadPhotoFromPHAsset(assetIdentifier)
+            return
+        }
+        
+        // Try loading from documents directory
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        let fileURL = documentsPath?.appendingPathComponent(filename)
+        
+        if let fileURL = fileURL,
+           let imageData = try? Data(contentsOf: fileURL),
+           let loadedImage = UIImage(data: imageData) {
+            await MainActor.run {
+                self.image = loadedImage
+                self.isLoading = false
+            }
+        } else {
+            // Try to extract asset identifier from filename if it contains one
+            if filename.contains(":") {
+                let assetIdentifier = filename
+                await loadPhotoFromPHAsset(assetIdentifier)
+            } else {
+                await MainActor.run {
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+    
+    private func loadPhotoFromPHAsset(_ assetIdentifier: String) async {
+        // Fetch the PHAsset
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+        guard let asset = fetchResult.firstObject else { 
+            await MainActor.run {
+                self.isLoading = false
+            }
+            return 
+        }
+        
+        // Load high quality image for full screen
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = true
+        options.resizeMode = .exact
+        
+        let targetSize = CGSize(width: 1200, height: 1200) // High quality for full screen
+        
+        await withCheckedContinuation { continuation in
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: targetSize,
+                contentMode: .aspectFit,
+                options: options
+            ) { image, info in
+                Task { @MainActor in
+                    if let image = image {
+                        self.image = image
+                    }
+                    self.isLoading = false
+                }
+                continuation.resume(returning: ())
             }
         }
     }
@@ -1322,12 +1536,12 @@ struct TripPhotosView: View {
                 .padding()
         } else {
             ScrollView {
-                LazyVStack(spacing: 20) {
+                LazyVStack(spacing: 16) {
                     ForEach(sortedDays.sorted { $0.order < $1.order }) { day in
                         DayPhotosSection(day: day)
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 8)
             }
         }
     }
@@ -1342,32 +1556,27 @@ struct DayPhotosSection: View {
     
     var body: some View {
         if !dayPhotos.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                // Day header
-                HStack {
-                    Text(day.date?.formatted(date: .complete, time: .omitted) ?? "Unknown Date")
-                        .font(.headline)
+            VStack(alignment: .leading, spacing: 6) {
+                // Day header - full width with day name
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(day.date?.formatted(.dateTime.weekday(.wide).month().day().year()) ?? "Unknown Date")
+                        .font(.subheadline)
                         .foregroundColor(.primary)
-                    
-                    Spacer()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     
                     Text("\(dayPhotos.count) photo\(dayPhotos.count == 1 ? "" : "s")")
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundColor(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
                         .background(Color(.systemGray6))
-                        .cornerRadius(8)
+                        .cornerRadius(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 
                 // Photos grid
                 PhotosGrid(photos: dayPhotos)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color(.systemBackground))
-            .cornerRadius(12)
-            .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
         }
     }
 }
@@ -1375,14 +1584,15 @@ struct DayPhotosSection: View {
 struct PhotosGrid: View {
     let photos: [Photo]
     
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
-    
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 8) {
+        LazyVGrid(columns: [
+            GridItem(.flexible()),
+            GridItem(.flexible()),
+            GridItem(.flexible())
+        ], spacing: 12) {
             ForEach(photos.sorted { $0.order < $1.order }) { photo in
                 TripPhotoThumbnailView(photo: photo)
-                    .aspectRatio(1, contentMode: .fill)
-                    .frame(maxWidth: .infinity)
+                    .frame(width: 100, height: 100)
                     .clipped()
                     .cornerRadius(8)
             }

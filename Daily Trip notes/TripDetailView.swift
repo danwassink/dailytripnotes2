@@ -7,8 +7,8 @@ import AVFoundation
 
 enum ViewMode {
     case dates
-    case map
     case photos
+    case map
 }
 
 struct TripDetailView: View {
@@ -17,7 +17,6 @@ struct TripDetailView: View {
     @State private var showingAddDay = false
     @State private var showingEditTrip = false
     @State private var showingTripPhotoPicker = false // New state variable
-    @State private var showingContextMenu = false
     @State private var refreshTrigger = false
     @State private var journalRefreshTrigger = false
     @State private var viewMode: ViewMode = .dates
@@ -103,8 +102,8 @@ struct TripDetailView: View {
             Section {
                 Picker("View Mode", selection: $viewMode) {
                     Text("Dates").tag(ViewMode.dates)
-                    Text("Map").tag(ViewMode.map)
                     Text("Photos").tag(ViewMode.photos)
+                    Text("Map").tag(ViewMode.map)
                 }
                 .pickerStyle(SegmentedPickerStyle())
                 .padding(.vertical, 8)
@@ -145,12 +144,7 @@ struct TripDetailView: View {
                         showingAddDay = true
                     }
                 } else {
-                    Button(action: {
-                        showingContextMenu = true
-                    }) {
-                        Image(systemName: "ellipsis")
-                    }
-                    .confirmationDialog("Trip Actions", isPresented: $showingContextMenu, titleVisibility: .hidden) {
+                    Menu {
                         Button("Edit Trip") {
                             showingEditTrip = true
                         }
@@ -158,8 +152,8 @@ struct TripDetailView: View {
                         Button("Add Photos to Trip") {
                             showingTripPhotoPicker = true
                         }
-                        
-                        Button("Cancel", role: .cancel) { }
+                    } label: {
+                        Image(systemName: "ellipsis")
                     }
                 }
             }

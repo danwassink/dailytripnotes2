@@ -718,7 +718,7 @@ struct PhotoAssetView: View {
                     .overlay(
                         // Gray overlay for disabled photos
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(isDisabled ? Color.black.opacity(0.4) : Color.clear)
+                            .fill(isDisabled ? Color.black.opacity(0.6) : Color.clear)
                     )
             } else if hasError {
                 // Show error state

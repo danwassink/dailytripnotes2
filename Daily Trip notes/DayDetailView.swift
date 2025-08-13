@@ -94,45 +94,18 @@ struct DayDetailView: View {
                             photosDeleted.toggle() // Force refresh when photo is deleted
                         })
                     }
-                    
-                    // Add Photos Button - Custom Date-Filtered Picker
-                    Button(action: {
-                        showingCustomPhotoPicker = true
-                    }) {
-                        VStack(spacing: 8) {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 30))
-                                .foregroundColor(.blue)
-                            Text("Add Media")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
-                        .frame(width: 100, height: 100)
-                        .background(Color(.systemGray6))
-                        .cornerRadius(8)
-                    }
-                    .sheet(isPresented: $showingCustomPhotoPicker) {
-                        CustomPhotoPickerView(tripDay: tripDay, onPhotosSelected: { selectedAssets in
-                            processSelectedPHAssets(selectedAssets)
-                        })
-                    }
                 }
+                .padding(.horizontal, 20)
                 .padding(.vertical, 8)
             }
             .id("\(photosAdded)-\(photosDeleted)") // Force refresh when photos are added or deleted
             
             // Journal entry section
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Journal Entry")
-                        .font(.headline)
-                    Spacer()
-                    Button(journalContent.isEmpty ? "Add" : "Edit") {
-                        showingJournalEditor = true
-                    }
-                    .foregroundColor(.blue)
-                }
-                .padding(.horizontal, 20)
+                Text("Journal Entry")
+                    .font(.headline)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
                 
                 ScrollView {
                     if journalContent.isEmpty {
@@ -160,9 +133,47 @@ struct DayDetailView: View {
                 loadJournalContent() // Refresh the content when journal is saved
             }
         }
+        .sheet(isPresented: $showingCustomPhotoPicker) {
+            CustomPhotoPickerView(tripDay: tripDay, onPhotosSelected: { selectedAssets in
+                processSelectedPHAssets(selectedAssets)
+            })
+        }
         .onAppear {
             loadJournalContent()
         }
+        .overlay(
+            // Stacked FABs in lower right corner
+            VStack(spacing: 12) {
+                // Journal FAB
+                Button(action: {
+                    showingJournalEditor = true
+                }) {
+                    Image(systemName: "pencil")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: 56, height: 56)
+                        .background(Color.blue)
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+                }
+                
+                // Photos FAB
+                Button(action: {
+                    showingCustomPhotoPicker = true
+                }) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: 56, height: 56)
+                        .background(Color.green)
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+                }
+            }
+            .padding(.trailing, 20)
+            .padding(.bottom, 20),
+            alignment: .bottomTrailing
+        )
     }
     
     private func loadJournalContent() {
@@ -437,14 +448,72 @@ struct PhotoThumbnailView: View {
         if photo.mediaType == "video" {
             await generateVideoThumbnail(filename: filename)
         } else {
-            // Load photo as before
+            // First try to load from assetIdentifier if available
+            if let assetIdentifier = photo.assetIdentifier {
+                await loadPhotoFromPHAsset(assetIdentifier)
+                return
+            }
+            
+            // Check if this is a temporary photo from PHAsset (old format)
+            if filename.hasPrefix("temp_") {
+                let assetIdentifier = String(filename.dropFirst(5)) // Remove "temp_" prefix
+                await loadPhotoFromPHAsset(assetIdentifier)
+                return
+            }
+            
+            // Try loading from documents directory
             let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             let fileURL = documentsPath?.appendingPathComponent(filename)
             
             if let fileURL = fileURL,
                let imageData = try? Data(contentsOf: fileURL),
                let loadedImage = UIImage(data: imageData) {
-                image = loadedImage
+                await MainActor.run {
+                    self.image = loadedImage
+                }
+            } else {
+                // Try to extract asset identifier from filename if it contains one
+                if filename.contains(":") {
+                    let assetIdentifier = filename
+                    await loadPhotoFromPHAsset(assetIdentifier)
+                }
+            }
+        }
+    }
+    
+    private func loadPhotoFromPHAsset(_ assetIdentifier: String) async {
+        // Fetch the PHAsset
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+        guard let asset = fetchResult.firstObject else { return }
+        
+        // Try multiple approaches to load the image
+        await loadPhotoWithMultipleAttempts(asset: asset)
+    }
+    
+    private func loadPhotoWithMultipleAttempts(asset: PHAsset) async {
+        // Attempt 1: Fast thumbnail with opportunistic delivery
+        let fastOptions = PHImageRequestOptions()
+        fastOptions.deliveryMode = .opportunistic
+        fastOptions.isNetworkAccessAllowed = true
+        fastOptions.resizeMode = .fast
+        
+        let targetSize = CGSize(width: 100, height: 100) // 2x for retina
+        
+        await withCheckedContinuation { continuation in
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: targetSize,
+                contentMode: .aspectFill,
+                options: fastOptions
+            ) { image, info in
+                if let image = image {
+                    Task { @MainActor in
+                        self.image = image
+                    }
+                    continuation.resume(returning: ())
+                } else {
+                    continuation.resume(returning: ())
+                }
             }
         }
     }

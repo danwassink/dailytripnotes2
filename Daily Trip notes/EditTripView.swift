@@ -12,6 +12,8 @@ struct EditTripView: View {
     @State private var endDate: Date
     @State private var description: String
     @State private var showingFeaturePhotoPicker = false
+    @State private var selectedFeaturePhotoFilename: String?
+    @State private var isAddingFeaturePhoto = false
     
     init(trip: Trip) {
         self.trip = trip
@@ -19,6 +21,7 @@ struct EditTripView: View {
         _startDate = State(initialValue: trip.startDate ?? Date())
         _endDate = State(initialValue: trip.endDate ?? Date())
         _description = State(initialValue: trip.desc ?? "")
+        _selectedFeaturePhotoFilename = State(initialValue: trip.featurePhotoFilename)
     }
     
     var body: some View {
@@ -38,7 +41,7 @@ struct EditTripView: View {
                 
                 Section("Feature Photo") {
                     VStack(alignment: .leading, spacing: 12) {
-                        if let featurePhotoFilename = trip.featurePhotoFilename {
+                        if let featurePhotoFilename = selectedFeaturePhotoFilename {
                             // Show current feature photo
                             TripFeaturePhotoView(filename: featurePhotoFilename)
                                 .frame(height: 200)
@@ -108,6 +111,9 @@ struct EditTripView: View {
                     setFeaturePhoto(selectedPhoto)
                 })
             }
+            .onChange(of: showingFeaturePhotoPicker) { oldValue, newValue in
+                print("EditTripView: showingFeaturePhotoPicker changed from \(oldValue) to \(newValue)")
+            }
         }
     }
     
@@ -119,27 +125,56 @@ struct EditTripView: View {
         } else {
             // This is an existing photo, just set the filename
             trip.featurePhotoFilename = photo.filename
+            selectedFeaturePhotoFilename = photo.filename
         }
     }
     
     private func copyPhotoFromPHAsset(_ photo: Photo) {
-        guard let localIdentifier = photo.filename else { return }
+        // Use assetIdentifier if available, otherwise extract from filename
+        let assetIdentifier: String
+        if let identifier = photo.assetIdentifier {
+            assetIdentifier = identifier
+        } else if let localIdentifier = photo.filename {
+            // Extract the actual PHAsset localIdentifier (remove temp_ prefix if present)
+            assetIdentifier = localIdentifier.hasPrefix("temp_") ? String(localIdentifier.dropFirst(5)) : localIdentifier
+        } else {
+            print("EditTripView: No asset identifier or filename available")
+            return
+        }
         
-        // Extract the actual PHAsset localIdentifier (remove temp_ prefix if present)
-        let assetIdentifier = localIdentifier.hasPrefix("temp_") ? String(localIdentifier.dropFirst(5)) : localIdentifier
+        print("EditTripView: Copying photo with asset identifier: \(assetIdentifier)")
         
         // Fetch the PHAsset
         let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
-        guard let asset = fetchResult.firstObject else { return }
+        guard let asset = fetchResult.firstObject else { 
+            print("EditTripView: No PHAsset found for identifier: \(assetIdentifier)")
+            return 
+        }
         
-        // Load the image data
+        // Load the image data using modern API
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
-        options.isNetworkAccessAllowed = false
+        options.isNetworkAccessAllowed = true
         options.isSynchronous = false
         
-        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
-            guard let imageData = data else { return }
+        let targetSize = CGSize(width: 1200, height: 1200) // High quality for feature photo
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: .aspectFit,
+            options: options
+        ) { image, info in
+            guard let image = image else { 
+                print("EditTripView: Failed to load image from PHAsset")
+                return 
+            }
+            
+            // Convert image to JPEG data
+            guard let imageData = image.jpegData(compressionQuality: 0.9) else {
+                print("EditTripView: Failed to convert image to JPEG data")
+                return
+            }
             
             // Generate a unique filename
             let filename = "feature_photo_\(UUID().uuidString).jpg"
@@ -147,18 +182,35 @@ struct EditTripView: View {
             // Save to documents directory
             if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
                 let photoURL = documentsPath.appendingPathComponent(filename)
-                try? imageData.write(to: photoURL)
-                
-                // Update the trip with the new filename
-                DispatchQueue.main.async {
-                    self.trip.featurePhotoFilename = filename
+                do {
+                    try imageData.write(to: photoURL)
+                    print("EditTripView: Successfully saved feature photo to: \(filename)")
+                    
+                    // Update both the trip and the local state immediately
+                    DispatchQueue.main.async {
+                        self.trip.featurePhotoFilename = filename
+                        self.selectedFeaturePhotoFilename = filename
+                        print("EditTripView: Updated trip feature photo filename to: \(filename)")
+                        print("EditTripView: Updated local state to show feature photo immediately")
+                    }
+                } catch {
+                    print("EditTripView: Error saving feature photo: \(error)")
                 }
             }
         }
     }
     
     private func removeFeaturePhoto() {
+        print("EditTripView: Removing feature photo")
+        print("EditTripView: Before removal - showingFeaturePhotoPicker: \(showingFeaturePhotoPicker)")
+        
+        // Ensure photo picker is not showing
+        showingFeaturePhotoPicker = false
+        
         trip.featurePhotoFilename = nil
+        selectedFeaturePhotoFilename = nil
+        print("EditTripView: Feature photo removed, local state: \(selectedFeaturePhotoFilename ?? "nil")")
+        print("EditTripView: After removal - showingFeaturePhotoPicker: \(showingFeaturePhotoPicker)")
     }
     
     private func saveChanges() {

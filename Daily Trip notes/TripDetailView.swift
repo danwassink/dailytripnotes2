@@ -186,11 +186,11 @@ struct TripDetailView: View {
             journalRefreshTrigger.toggle()
         }
         .onReceive(NotificationCenter.default.publisher(for: .photosAddedToTripDay)) { notification in
-            // Check if the photo was added to a day in this trip
-            if let tripDay = notification.object as? TripDay,
-               tripDay.trip?.id == trip.id {
-                refreshTrigger.toggle() // Force refresh to show new photos
-            }
+            // Refresh when photos are added to any day in this trip
+            // The notification might not contain a specific tripDay object
+            // but we know photos were added to this trip
+            print("TripDetailView: Received photosAddedToTripDay notification, refreshing...")
+            refreshTrigger.toggle() // Force refresh to show new photos
         }
         .id(refreshTrigger) // Force refresh when editing sheet is dismissed
     }
@@ -255,6 +255,7 @@ struct DayRowView: View {
     
     var sortedPhotos: [Photo] {
         let photos = tripDay.photos?.allObjects as? [Photo] ?? []
+        let _ = print("DayRowView: tripDay.photos count: \(photos.count)")
         
         // Filter photos to only show those taken on this specific day
         let dayStart = Calendar.current.startOfDay(for: tripDay.date ?? Date())
@@ -264,6 +265,8 @@ struct DayRowView: View {
             let photoDate = photo.photoDate ?? photo.createdDate ?? Date()
             return photoDate >= dayStart && photoDate < dayEnd
         }
+        
+        let _ = print("DayRowView: filteredPhotos count: \(filteredPhotos.count)")
         
         return filteredPhotos.sorted { $0.order < $1.order }
     }
@@ -303,10 +306,15 @@ struct DayRowView: View {
             }
             
             // Photo thumbnails below the text
+            let _ = print("TripDetailView: sortedPhotos count: \(sortedPhotos.count)")
+            let _ = print("TripDetailView: sortedPhotos isEmpty: \(sortedPhotos.isEmpty)")
+            
             if !sortedPhotos.isEmpty {
+                let _ = print("TripDetailView: Creating photo thumbnails")
                 HStack(spacing: 8) {
                     ForEach(Array(sortedPhotos.prefix(3)), id: \.id) { photo in
-                        TripPhotoThumbnailView(photo: photo)
+                        let _ = print("TripDetailView: Creating TripPhotoThumbnailView for photo: \(photo.filename ?? "nil")")
+                        TripPhotoThumbnailView(photo: photo, onPhotoDeleted: {})
                             .frame(width: 60, height: 60)
                             .clipped()
                             .cornerRadius(8)
@@ -321,6 +329,8 @@ struct DayRowView: View {
                             .cornerRadius(8)
                     }
                 }
+            } else {
+                let _ = print("TripDetailView: No photos to display")
             }
         }
         .padding(.vertical, 4)
@@ -366,8 +376,11 @@ struct TripFeaturePhotoPickerView: View {
                                     onPhotoSelected(photo)
                                     dismiss()
                                 }) {
-                                    TripPhotoThumbnailView(photo: photo)
+                                    TripPhotoThumbnailView(photo: photo, onPhotoDeleted: {})
                                         .frame(width: 100, height: 100)
+                                        .aspectRatio(contentMode: .fill)
+                                        .clipped()
+                                        .cornerRadius(8)
                                 }
                             }
                         }
@@ -431,6 +444,7 @@ struct TripFeaturePhotoPickerView: View {
             let photo = Photo(context: CoreDataManager.shared.container.viewContext)
             photo.id = UUID()
             photo.filename = "temp_\(asset.localIdentifier)" // Use temp_ prefix to identify PHAssets
+            photo.assetIdentifier = asset.localIdentifier // Add the asset identifier for proper loading
             photo.createdDate = asset.creationDate ?? Date()
             photo.photoDate = asset.creationDate ?? Date()
             photo.order = 0
@@ -450,6 +464,8 @@ struct TripFeaturePhotoPickerView: View {
 struct TripFeaturePhotoView: View {
     let filename: String
     @State private var image: UIImage?
+    @State private var isLoading = true
+    @State private var hasError = false
 
     var body: some View {
         ZStack {
@@ -460,13 +476,36 @@ struct TripFeaturePhotoView: View {
                     .frame(maxWidth: .infinity)
                     .clipped()
                     .cornerRadius(12)
-            } else {
+            } else if isLoading {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color(.systemGray5))
                     .frame(maxWidth: .infinity)
                     .overlay(
                         ProgressView()
                             .scaleEffect(0.8)
+                    )
+            } else if hasError {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.systemRed).opacity(0.3))
+                    .frame(maxWidth: .infinity)
+                    .overlay(
+                        VStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundColor(.red)
+                                .font(.caption)
+                            Text("Error")
+                                .font(.caption2)
+                                .foregroundColor(.red)
+                        }
+                    )
+            } else {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.systemGray5))
+                    .frame(maxWidth: .infinity)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.secondary)
+                            .font(.title2)
                     )
             }
         }
@@ -476,20 +515,30 @@ struct TripFeaturePhotoView: View {
     }
 
     private func loadPhoto() async {
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-        let fileURL = documentsPath?.appendingPathComponent(filename)
-
-        if let fileURL = fileURL,
-           let imageData = try? Data(contentsOf: fileURL),
-           let loadedImage = UIImage(data: imageData) {
-            image = loadedImage
+        PhotoLoader.shared.loadPhoto(
+            filename: filename,
+            assetIdentifier: nil,
+            mediaType: "photo"
+        ) { image, isLoading, hasError in
+            Task { @MainActor in
+                self.image = image
+                self.isLoading = isLoading
+                self.hasError = hasError
+            }
         }
     }
 }
 
 struct TripPhotoThumbnailView: View {
     let photo: Photo
+    let onPhotoDeleted: () -> Void
     @State private var image: UIImage?
+    @State private var showingDeleteAlert = false
+    @State private var showingVideoPlayer = false
+    @State private var showingFullScreenPhoto = false
+    @State private var isLoading = true
+    @State private var hasError = false
+    @Environment(\.managedObjectContext) private var viewContext
     
     var body: some View {
         ZStack {
@@ -499,13 +548,84 @@ struct TripPhotoThumbnailView: View {
                     .aspectRatio(contentMode: .fill)
                     .clipped()
                     .cornerRadius(6)
-            } else {
+            } else if isLoading {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color(.systemGray5))
                     .overlay(
                         ProgressView()
                             .scaleEffect(0.6)
                     )
+            } else if hasError {
+                // Show error state
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(.systemRed).opacity(0.3))
+                    .overlay(
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundColor(.red)
+                            .font(.caption)
+                    )
+            } else {
+                // Show placeholder when not loading and no image
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(.systemGray4))
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.secondary)
+                            .font(.title2)
+                    )
+            }
+            
+            // Video indicator
+            if photo.mediaType == "video" {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Image(systemName: "play.circle.fill")
+                            .foregroundColor(.white)
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                            .font(.title2)
+                            .padding(4)
+                    }
+                }
+            }
+        }
+        .onTapGesture {
+            if photo.mediaType == "video" {
+                showingVideoPlayer = true
+            } else {
+                showingFullScreenPhoto = true
+            }
+        }
+        .onLongPressGesture {
+            showingDeleteAlert = true
+        }
+        .alert("Delete Media", isPresented: $showingDeleteAlert) {
+            Button("Delete", role: .destructive) {
+                deletePhoto()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Are you sure you want to delete this \(photo.mediaType ?? "media")? This action cannot be undone.")
+        }
+        .sheet(isPresented: $showingVideoPlayer) {
+            if let filename = photo.filename {
+                VideoPlayerView(filename: filename)
+            }
+        }
+        .sheet(isPresented: $showingFullScreenPhoto) {
+            // Get the photos from the parent view context
+            if let trip = photo.tripDay?.trip {
+                let allPhotos = trip.tripDays?.compactMap { $0 as? TripDay }
+                    .flatMap { $0.photos?.compactMap { $0 as? Photo } ?? [] } ?? []
+                if let currentIndex = allPhotos.firstIndex(of: photo) {
+                    FullScreenPhotoView(photos: allPhotos, currentIndex: currentIndex, onPhotoDeleted: onPhotoDeleted)
+                } else {
+                    FullScreenPhotoView(photo: photo, onPhotoDeleted: onPhotoDeleted)
+                }
+            } else {
+                FullScreenPhotoView(photo: photo, onPhotoDeleted: onPhotoDeleted)
             }
         }
         .task {
@@ -513,160 +633,189 @@ struct TripPhotoThumbnailView: View {
         }
     }
     
+    private func deletePhoto() {
+        // Delete the photo file from storage
+        if let filename = photo.filename {
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            let fileURL = documentsPath?.appendingPathComponent(filename)
+            
+            if let fileURL = fileURL {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
+        }
+        
+        // Remove from Core Data
+        viewContext.delete(photo)
+        
+        // Save changes
+        try? viewContext.save()
+        onPhotoDeleted() // Notify parent view
+    }
+    
     private func loadPhoto() async {
         guard let filename = photo.filename else { 
-            print("TripPhotoThumbnailView: No filename provided")
+            DispatchQueue.main.async {
+                self.isLoading = false
+                self.hasError = true
+            }
             return 
         }
         
-        print("TripPhotoThumbnailView: Loading photo with filename: \(filename)")
-        
-        // First try to load from assetIdentifier if available
-        if let assetIdentifier = photo.assetIdentifier {
-            print("TripPhotoThumbnailView: Loading from assetIdentifier: \(assetIdentifier)")
-            await loadPhotoFromPHAsset(assetIdentifier)
-            return
-        }
-        
-        // Check if this is a temporary photo from PHAsset (old format)
-        if filename.hasPrefix("temp_") {
-            print("TripPhotoThumbnailView: Loading from PHAsset (temp_ format)")
-            let assetIdentifier = String(filename.dropFirst(5)) // Remove "temp_" prefix
-            await loadPhotoFromPHAsset(assetIdentifier)
-            return
-        }
-        
-        // Try loading from documents directory
-        print("TripPhotoThumbnailView: Loading from documents directory")
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-        let fileURL = documentsPath?.appendingPathComponent(filename)
-        
-        if let fileURL = fileURL,
-           let imageData = try? Data(contentsOf: fileURL),
-           let loadedImage = UIImage(data: imageData) {
-            print("TripPhotoThumbnailView: Successfully loaded image from documents")
-            image = loadedImage
+        // Handle videos differently - generate thumbnail
+        if photo.mediaType == "video" {
+            await generateVideoThumbnail(filename: filename)
         } else {
-            print("TripPhotoThumbnailView: Failed to load image from documents")
-            // Try to extract asset identifier from filename if it contains one
-            if filename.contains(":") {
-                let assetIdentifier = filename
-                print("TripPhotoThumbnailView: Trying to load from filename as asset identifier: \(assetIdentifier)")
-                await loadPhotoFromPHAsset(assetIdentifier)
+            // Use the unified PhotoLoader for photos
+            PhotoLoader.shared.loadPhoto(
+                filename: filename,
+                assetIdentifier: photo.assetIdentifier,
+                mediaType: photo.mediaType
+            ) { image, isLoading, hasError in
+                Task { @MainActor in
+                    self.image = image
+                    self.isLoading = isLoading
+                    self.hasError = hasError
+                }
             }
         }
     }
     
-    private func loadPhotoFromPHAsset(_ assetIdentifier: String) async {
-        print("TripPhotoThumbnailView: Loading from asset identifier: \(assetIdentifier)")
-        
-        // Fetch the PHAsset
-        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
-        guard let asset = fetchResult.firstObject else { 
-            print("TripPhotoThumbnailView: No PHAsset found for identifier: \(assetIdentifier)")
+    private func generateVideoThumbnail(filename: String) async {
+        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { 
+            await MainActor.run {
+                self.isLoading = false
+                self.hasError = true
+            }
             return 
         }
+        let videoURL = documentsPath.appendingPathComponent(filename)
         
-        print("TripPhotoThumbnailView: Found PHAsset, requesting image")
-        
-        // Try multiple approaches to load the image
-        await loadPhotoWithMultipleAttempts(asset: asset)
-    }
-    
-    private func loadPhotoWithMultipleAttempts(asset: PHAsset) async {
-        // Attempt 1: Fast thumbnail with opportunistic delivery
-        let fastOptions = PHImageRequestOptions()
-        fastOptions.deliveryMode = .opportunistic
-        fastOptions.isNetworkAccessAllowed = true
-        fastOptions.resizeMode = .fast
-        
-        let targetSize = CGSize(width: 80, height: 80) // 2x for retina
-        
-        await withCheckedContinuation { continuation in
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: targetSize,
-                contentMode: .aspectFill,
-                options: fastOptions
-            ) { image, info in
-                DispatchQueue.main.async {
-                    if let image = image {
-                        print("TripPhotoThumbnailView: Successfully loaded image with fast method")
-                        self.image = image
-                        continuation.resume()
-                        return
-                    }
-                    
-                    // Attempt 2: Try with different options
-                    print("TripPhotoThumbnailView: Fast method failed, trying fallback")
-                    self.loadPhotoWithFallback(asset: asset)
-                    continuation.resume()
-                }
+        // First try: Use AVAssetImageGenerator with more flexible options
+        do {
+            let asset = AVAsset(url: videoURL)
+            let imageGenerator = AVAssetImageGenerator(asset: asset)
+            imageGenerator.appliesPreferredTrackTransform = true
+            imageGenerator.maximumSize = CGSize(width: 200, height: 200)
+            
+            // Try to generate thumbnail at the beginning
+            let result = try await imageGenerator.image(at: .zero)
+            await MainActor.run {
+                self.image = UIImage(cgImage: result.image)
+                self.isLoading = false
+                self.hasError = false
             }
+            return
+        } catch {
+            print("AVAssetImageGenerator failed: \(error)")
+        }
+        
+        // Second try: Try with PHAsset if we have an asset identifier
+        if let assetIdentifier = photo.assetIdentifier {
+            await generateThumbnailFromPHAsset(assetIdentifier)
+            return
+        }
+        
+        // Third try: Try to extract thumbnail using AVAsset with different approach
+        do {
+            let asset = AVAsset(url: videoURL)
+            let imageGenerator = AVAssetImageGenerator(asset: asset)
+            imageGenerator.appliesPreferredTrackTransform = true
+            imageGenerator.maximumSize = CGSize(width: 100, height: 100)
+            
+            // Try to get a frame from a different time position
+            let duration = try await asset.load(.duration)
+            let timePosition = CMTime(seconds: min(duration.seconds / 2, 1.0), preferredTimescale: 600)
+            
+            let result = try await imageGenerator.image(at: timePosition)
+            await MainActor.run {
+                self.image = UIImage(cgImage: result.image)
+                self.isLoading = false
+                self.hasError = false
+            }
+            return
+        } catch {
+            print("Second AVAssetImageGenerator attempt failed: \(error)")
+        }
+        
+        // Final fallback: Show a video placeholder
+        await MainActor.run {
+            self.isLoading = false
+            self.hasError = false
+            // Create a simple video placeholder image
+            self.createVideoPlaceholder()
         }
     }
     
-    private func loadPhotoWithFallback(asset: PHAsset) {
-        print("TripPhotoThumbnailView: Trying fallback method")
-        
-        // Try with completely different options
-        let fallbackOptions = PHImageRequestOptions()
-        fallbackOptions.deliveryMode = .highQualityFormat
-        fallbackOptions.isNetworkAccessAllowed = true
-        fallbackOptions.isSynchronous = false
-        
-        PHImageManager.default().requestImage(
-            for: asset,
-            targetSize: PHImageManagerMaximumSize, // Request full size
-            contentMode: .aspectFit,
-            options: fallbackOptions
-        ) { image, info in
-            DispatchQueue.main.async {
-                if let image = image {
-                    print("TripPhotoThumbnailView: Fallback method succeeded")
-                    // Scale down the full image to thumbnail size
-                    let thumbnailSize = CGSize(width: 80, height: 80) // Match the target size
-                    UIGraphicsBeginImageContextWithOptions(thumbnailSize, false, 0.0)
-                    image.draw(in: CGRect(origin: .zero, size: thumbnailSize))
-                    let thumbnail = UIGraphicsGetImageFromCurrentImageContext()
-                    UIGraphicsEndImageContext()
-                    
-                    self.image = thumbnail
-                } else {
-                    print("TripPhotoThumbnailView: Fallback method also failed")
-                    // Try one more approach with different options
-                    self.loadPhotoWithFinalAttempt(asset: asset)
-                }
+    private func generateThumbnailFromPHAsset(_ assetIdentifier: String) async {
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+        guard let asset = fetchResult.firstObject else {
+            await MainActor.run {
+                self.isLoading = false
+                self.hasError = true
             }
+            return
         }
-    }
-    
-    private func loadPhotoWithFinalAttempt(asset: PHAsset) {
-        print("TripPhotoThumbnailView: Trying final attempt with different options")
         
-        // Try with synchronous loading and different delivery mode
-        let finalOptions = PHImageRequestOptions()
-        finalOptions.deliveryMode = .fastFormat
-        finalOptions.isNetworkAccessAllowed = true
-        finalOptions.isSynchronous = true
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.isNetworkAccessAllowed = true
+        options.resizeMode = .fast
+        
+        let targetSize = CGSize(width: 200, height: 200)
         
         PHImageManager.default().requestImage(
             for: asset,
-            targetSize: CGSize(width: 80, height: 80),
+            targetSize: targetSize,
             contentMode: .aspectFill,
-            options: finalOptions
+            options: options
         ) { image, info in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 if let image = image {
-                    print("TripPhotoThumbnailView: Final attempt succeeded")
                     self.image = image
+                    self.isLoading = false
+                    self.hasError = false
                 } else {
-                    print("TripPhotoThumbnailView: All attempts failed")
-                    // At this point, we've tried everything - show a placeholder
-                    // The placeholder is already shown by the ZStack when image is nil
+                    self.isLoading = false
+                    self.hasError = true
                 }
             }
         }
+    }
+    
+    private func createVideoPlaceholder() {
+        // Create a simple video placeholder with play button
+        let size = CGSize(width: 100, height: 100)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        
+        let placeholderImage = renderer.image { context in
+            // Background
+            UIColor.systemGray5.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            
+            // Play button
+            let playButtonSize: CGFloat = 40
+            let playButtonRect = CGRect(
+                x: (size.width - playButtonSize) / 2,
+                y: (size.height - playButtonSize) / 2,
+                width: playButtonSize,
+                height: playButtonSize
+            )
+            
+            UIColor.blue.setFill()
+            context.cgContext.fillEllipse(in: playButtonRect)
+            
+            // Play triangle
+            let trianglePath = UIBezierPath()
+            trianglePath.move(to: CGPoint(x: playButtonRect.midX + 8, y: playButtonRect.midY))
+            trianglePath.addLine(to: CGPoint(x: playButtonRect.midX - 8, y: playButtonRect.midY - 8))
+            trianglePath.addLine(to: CGPoint(x: playButtonRect.midX - 8, y: playButtonRect.midY + 8))
+            trianglePath.close()
+            
+            UIColor.white.setFill()
+            trianglePath.fill()
+        }
+        
+        self.image = placeholderImage
     }
 }
 
@@ -679,9 +828,11 @@ struct TripMapView: View {
     @State private var photoAnnotations: [PhotoAnnotation] = []
     
     var body: some View {
-        Map(coordinateRegion: $region, annotationItems: photoAnnotations) { annotation in
-            MapAnnotation(coordinate: annotation.coordinate) {
-                PhotoAnnotationView(annotation: annotation)
+        Map {
+            ForEach(photoAnnotations) { annotation in
+                Annotation(annotation.title, coordinate: annotation.coordinate) {
+                    PhotoAnnotationView(annotation: annotation)
+                }
             }
         }
         .onAppear {
@@ -788,141 +939,119 @@ struct PhotoAnnotationView: View {
                 .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
         }
         .onAppear {
-            loadPhotoThumbnail()
+            Task {
+                await loadPhotoThumbnail()
+            }
         }
         .onTapGesture {
             showingFullScreenPhoto = true
         }
         .sheet(isPresented: $showingFullScreenPhoto) {
-            FullScreenPhotoView(photo: annotation.photo)
+            // Get the photos from the parent view context
+            if let trip = annotation.photo.tripDay?.trip {
+                let allPhotos = trip.tripDays?.compactMap { $0 as? TripDay }
+                    .flatMap { $0.photos?.compactMap { $0 as? Photo } ?? [] } ?? []
+                if let currentIndex = allPhotos.firstIndex(of: annotation.photo) {
+                    FullScreenPhotoView(photos: allPhotos, currentIndex: currentIndex, onPhotoDeleted: {
+                        // Refresh the map annotations after deletion
+                        // This will be handled by the parent view's refresh logic
+                    })
+                } else {
+                    FullScreenPhotoView(photo: annotation.photo, onPhotoDeleted: {
+                        // Refresh the map annotations after deletion
+                        // This will be handled by the parent view's refresh logic
+                    })
+                }
+            } else {
+                FullScreenPhotoView(photo: annotation.photo, onPhotoDeleted: {
+                    // Refresh the map annotations after deletion
+                    // This will be handled by the parent view's refresh logic
+                })
+            }
         }
     }
     
-    private func loadPhotoThumbnail() {
+    private func loadPhotoThumbnail() async {
         guard let filename = annotation.photo.filename else { return }
         
         // Handle videos differently - generate thumbnail
         if annotation.photo.mediaType == "video" {
-            generateVideoThumbnail(filename: filename)
+            await generateVideoThumbnail(filename: filename)
             return
         }
         
-        // First try to load from assetIdentifier if available
-        if let assetIdentifier = annotation.photo.assetIdentifier {
-            loadPhotoFromPHAsset(assetIdentifier)
-            return
-        }
-        
-        // Check if this is a temporary photo from PHAsset (old format)
-        if filename.hasPrefix("temp_") {
-            let assetIdentifier = String(filename.dropFirst(5)) // Remove "temp_" prefix
-            loadPhotoFromPHAsset(assetIdentifier)
-            return
-        }
-        
-        // Try loading from documents directory
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-        let fileURL = documentsPath?.appendingPathComponent(filename)
-        
-        if let fileURL = fileURL,
-           let imageData = try? Data(contentsOf: fileURL),
-           let loadedImage = UIImage(data: imageData) {
-            DispatchQueue.main.async {
-                self.image = loadedImage
-                self.isLoading = false
-            }
-        } else {
-            // Try to extract asset identifier from filename if it contains one
-            if filename.contains(":") {
-                let assetIdentifier = filename
-                loadPhotoFromPHAsset(assetIdentifier)
-            } else {
-                DispatchQueue.main.async {
-                    self.isLoading = false
-                }
+        // Use unified photo loader for consistency
+        PhotoLoader.shared.loadPhoto(
+            filename: annotation.photo.filename,
+            assetIdentifier: annotation.photo.assetIdentifier,
+            mediaType: annotation.photo.mediaType
+        ) { image, isLoading, hasError in
+            Task { @MainActor in
+                self.image = image
+                self.isLoading = isLoading
             }
         }
     }
     
-    private func loadPhotoFromPHAsset(_ assetIdentifier: String) {
-        // Fetch the PHAsset
-        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
-        guard let asset = fetchResult.firstObject else { 
-            DispatchQueue.main.async {
+    private func generateVideoThumbnail(filename: String) async {
+        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { 
+            await MainActor.run {
                 self.isLoading = false
             }
             return 
         }
+        let videoURL = documentsPath.appendingPathComponent(filename)
         
-        // Try multiple approaches to load the image
-        loadPhotoWithMultipleAttempts(asset: asset)
-    }
-    
-    private func loadPhotoWithMultipleAttempts(asset: PHAsset) {
-        // Attempt 1: Fast thumbnail with opportunistic delivery
-        let fastOptions = PHImageRequestOptions()
-        fastOptions.deliveryMode = .opportunistic
-        fastOptions.isNetworkAccessAllowed = true
-        fastOptions.resizeMode = .fast
+        let asset = AVAsset(url: videoURL)
+        let imageGenerator = AVAssetImageGenerator(asset: asset)
+        imageGenerator.appliesPreferredTrackTransform = true
         
-        let targetSize = CGSize(width: 120, height: 120) // 2x for retina
-        
-        PHImageManager.default().requestImage(
-            for: asset,
-            targetSize: targetSize,
-            contentMode: .aspectFill,
-            options: fastOptions
-        ) { image, info in
-            DispatchQueue.main.async {
-                if let image = image {
-                    self.image = image
-                    self.isLoading = false
-                } else {
-                    // Try fallback approach
-                    self.loadPhotoWithFallback(asset: asset)
-                }
-            }
-        }
-    }
-    
-    private func loadPhotoWithFallback(asset: PHAsset) {
-        // Attempt 2: High quality with high quality delivery
-        let fallbackOptions = PHImageRequestOptions()
-        fallbackOptions.deliveryMode = .highQualityFormat
-        fallbackOptions.isNetworkAccessAllowed = true
-        fallbackOptions.resizeMode = .exact
-        
-        let targetSize = CGSize(width: 120, height: 120) // 2x for retina
-        
-        PHImageManager.default().requestImage(
-            for: asset,
-            targetSize: targetSize,
-            contentMode: .aspectFill,
-            options: fallbackOptions
-        ) { image, info in
-            DispatchQueue.main.async {
-                if let image = image {
-                    self.image = image
-                }
+        do {
+            let result = try await imageGenerator.image(at: .zero)
+            await MainActor.run {
+                self.image = UIImage(cgImage: result.image)
                 self.isLoading = false
             }
-        }
-    }
-    
-    private func generateVideoThumbnail(filename: String) {
-        // For videos, we'll show a video icon instead of trying to generate thumbnails
-        DispatchQueue.main.async {
-            self.isLoading = false
+        } catch {
+            print("Failed to generate video thumbnail: \(error)")
+            await MainActor.run {
+                self.isLoading = false
+            }
         }
     }
 }
 
 struct FullScreenPhotoView: View {
-    let photo: Photo
+    let photos: [Photo]
+    let currentIndex: Int
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.managedObjectContext) private var viewContext
     @State private var image: UIImage?
     @State private var isLoading = true
     @State private var showingVideoPlayer = false
+    @State private var currentPhotoIndex: Int
+    @State private var dragOffset: CGFloat = 0
+    @State private var showingDeleteAlert = false
+    @State private var onPhotoDeleted: (() -> Void)?
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    
+    init(photos: [Photo], currentIndex: Int, onPhotoDeleted: (() -> Void)? = nil) {
+        self.photos = photos
+        self.currentIndex = currentIndex
+        self._currentPhotoIndex = State(initialValue: currentIndex)
+        self.onPhotoDeleted = onPhotoDeleted
+    }
+    
+    // Convenience initializer for single photo (backward compatibility)
+    init(photo: Photo, onPhotoDeleted: (() -> Void)? = nil) {
+        self.photos = [photo]
+        self.currentIndex = 0
+        self._currentPhotoIndex = State(initialValue: 0)
+        self.onPhotoDeleted = onPhotoDeleted
+    }
     
     var body: some View {
         NavigationView {
@@ -934,6 +1063,90 @@ struct FullScreenPhotoView: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .scaleEffect(scale)
+                        .offset(x: offset.width + dragOffset, y: offset.height)
+                        .gesture(
+                            // Pinch to zoom
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    let delta = value / lastScale
+                                    lastScale = value
+                                    scale = min(max(scale * delta, 1.0), 4.0)
+                                }
+                                .onEnded { _ in
+                                    lastScale = 1.0
+                                    // Snap to bounds if over-zoomed
+                                    if scale < 1.0 {
+                                        withAnimation(.easeOut(duration: 0.2)) {
+                                            scale = 1.0
+                                            offset = .zero
+                                        }
+                                    }
+                                }
+                        )
+                        .gesture(
+                            // Pan gesture for zoomed image
+                            DragGesture()
+                                .onChanged { value in
+                                    if scale > 1.0 {
+                                        offset = CGSize(
+                                            width: lastOffset.width + value.translation.width,
+                                            height: lastOffset.height + value.translation.height
+                                        )
+                                    } else {
+                                        // Only track horizontal movement for photo navigation when not zoomed
+                                        dragOffset = value.translation.width
+                                    }
+                                }
+                                .onEnded { value in
+                                    if scale > 1.0 {
+                                        lastOffset = offset
+                                    } else {
+                                        let horizontalThreshold: CGFloat = 100
+                                        let verticalThreshold: CGFloat = 150
+                                        
+                                        // Check if it's primarily a horizontal or vertical swipe
+                                        let horizontalDistance = abs(value.translation.width)
+                                        let verticalDistance = abs(value.translation.height)
+                                        
+                                        if horizontalDistance > verticalDistance {
+                                            // Horizontal swipe - navigate between photos
+                                            if value.translation.width > horizontalThreshold && currentPhotoIndex > 0 {
+                                                // Swipe right - go to previous photo
+                                                currentPhotoIndex -= 1
+                                                loadCurrentPhoto()
+                                            } else if value.translation.width < -horizontalThreshold && currentPhotoIndex < photos.count - 1 {
+                                                // Swipe left - go to next photo
+                                                currentPhotoIndex += 1
+                                                loadCurrentPhoto()
+                                            }
+                                        } else if verticalDistance > verticalThreshold {
+                                            // Vertical swipe - close the sheet
+                                            if value.translation.height > 0 {
+                                                // Swipe down - close
+                                                dismiss()
+                                            }
+                                        }
+                                        
+                                        // Reset offset with animation
+                                        withAnimation(.easeOut(duration: 0.2)) {
+                                            dragOffset = 0
+                                        }
+                                    }
+                                }
+                        )
+                        .onTapGesture(count: 2) {
+                            // Double tap to zoom in/out
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                if scale > 1.0 {
+                                    scale = 1.0
+                                    offset = .zero
+                                    lastOffset = .zero
+                                } else {
+                                    scale = 2.0
+                                }
+                            }
+                        }
                 } else if isLoading {
                     ProgressView()
                         .scaleEffect(1.5)
@@ -950,7 +1163,7 @@ struct FullScreenPhotoView: View {
                 }
                 
                 // Video indicator and play button
-                if photo.mediaType == "video" {
+                if photos[currentPhotoIndex].mediaType == "video" {
                     VStack {
                         Spacer()
                         HStack {
@@ -969,6 +1182,24 @@ struct FullScreenPhotoView: View {
                         }
                     }
                 }
+                
+                // Photo counter (only show if there are multiple photos)
+                if photos.count > 1 {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Text("\(currentPhotoIndex + 1) of \(photos.count)")
+                                .foregroundColor(.white)
+                                .font(.caption)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.black.opacity(0.5))
+                                .cornerRadius(12)
+                                .padding(.bottom, 100)
+                        }
+                    }
+                }
             }
             .navigationTitle("Photo")
             .navigationBarTitleDisplayMode(.inline)
@@ -981,7 +1212,7 @@ struct FullScreenPhotoView: View {
                     .foregroundColor(.white)
                 }
                 
-                if photo.mediaType == "video" {
+                if photos[currentPhotoIndex].mediaType == "video" {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Play") {
                             showingVideoPlayer = true
@@ -989,100 +1220,86 @@ struct FullScreenPhotoView: View {
                         .foregroundColor(.white)
                     }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        showingDeleteAlert = true
+                    }) {
+                        Image(systemName: "trash")
+                            .foregroundColor(.white)
+                    }
+                }
             }
         }
         .sheet(isPresented: $showingVideoPlayer) {
-            if let filename = photo.filename {
+            if let filename = photos[currentPhotoIndex].filename {
                 VideoPlayerView(filename: filename)
             }
         }
+        .alert("Delete Photo", isPresented: $showingDeleteAlert) {
+            Button("Delete", role: .destructive) {
+                deleteCurrentPhoto()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Are you sure you want to delete this photo? This action cannot be undone.")
+        }
         .task {
-            await loadFullScreenPhoto()
+            loadCurrentPhoto()
         }
     }
     
-    private func loadFullScreenPhoto() async {
-        guard let filename = photo.filename else { return }
+    private func loadCurrentPhoto() {
+        let currentPhoto = photos[currentPhotoIndex]
+        guard let filename = currentPhoto.filename else { return }
+        
+        // Reset loading state and zoom
+        isLoading = true
+        image = nil
+        scale = 1.0
+        offset = .zero
+        lastOffset = .zero
         
         // Handle videos differently
-        if photo.mediaType == "video" {
-            await MainActor.run {
-                self.isLoading = false
-            }
+        if currentPhoto.mediaType == "video" {
+            isLoading = false
             return
         }
         
-        // First try to load from assetIdentifier if available
-        if let assetIdentifier = photo.assetIdentifier {
-            await loadPhotoFromPHAsset(assetIdentifier)
-            return
-        }
-        
-        // Check if this is a temporary photo from PHAsset (old format)
-        if filename.hasPrefix("temp_") {
-            let assetIdentifier = String(filename.dropFirst(5)) // Remove "temp_" prefix
-            await loadPhotoFromPHAsset(assetIdentifier)
-            return
-        }
-        
-        // Try loading from documents directory
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-        let fileURL = documentsPath?.appendingPathComponent(filename)
-        
-        if let fileURL = fileURL,
-           let imageData = try? Data(contentsOf: fileURL),
-           let loadedImage = UIImage(data: imageData) {
-            await MainActor.run {
-                self.image = loadedImage
-                self.isLoading = false
-            }
-        } else {
-            // Try to extract asset identifier from filename if it contains one
-            if filename.contains(":") {
-                let assetIdentifier = filename
-                await loadPhotoFromPHAsset(assetIdentifier)
-            } else {
-                await MainActor.run {
-                    self.isLoading = false
-                }
+        // Use unified photo loader for consistency
+        PhotoLoader.shared.loadPhoto(
+            filename: filename,
+            assetIdentifier: currentPhoto.assetIdentifier,
+            mediaType: currentPhoto.mediaType
+        ) { image, isLoading, hasError in
+            Task { @MainActor in
+                self.image = image
+                self.isLoading = isLoading
             }
         }
     }
     
-    private func loadPhotoFromPHAsset(_ assetIdentifier: String) async {
-        // Fetch the PHAsset
-        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
-        guard let asset = fetchResult.firstObject else { 
-            await MainActor.run {
-                self.isLoading = false
-            }
-            return 
-        }
+    private func deleteCurrentPhoto() {
+        let currentPhoto = photos[currentPhotoIndex]
+        onPhotoDeleted?() // Notify parent view
         
-        // Load high quality image for full screen
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .highQualityFormat
-        options.isNetworkAccessAllowed = true
-        options.resizeMode = .exact
-        
-        let targetSize = CGSize(width: 1200, height: 1200) // High quality for full screen
-        
-        await withCheckedContinuation { continuation in
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: targetSize,
-                contentMode: .aspectFit,
-                options: options
-            ) { image, info in
-                Task { @MainActor in
-                    if let image = image {
-                        self.image = image
-                    }
-                    self.isLoading = false
-                }
-                continuation.resume(returning: ())
+        // Delete the photo file from storage
+        if let filename = currentPhoto.filename {
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            let fileURL = documentsPath?.appendingPathComponent(filename)
+            
+            if let fileURL = fileURL {
+                try? FileManager.default.removeItem(at: fileURL)
             }
         }
+        
+        // Remove from Core Data
+        viewContext.delete(currentPhoto)
+        
+        // Save changes
+        try? viewContext.save()
+        
+        // Dismiss the sheet
+        dismiss()
     }
 }
 
@@ -1104,6 +1321,9 @@ struct TripPhotoPickerView: View {
     @State private var selectedPhotos: [PHAsset] = []
     @State private var isLoading = true
     @State private var hasPhotoLibraryAccess = false
+    @State private var isAddingPhotos = false
+    @State private var addingProgress = 0
+    @State private var totalPhotosToAdd = 0
     
     var body: some View {
         NavigationView {
@@ -1121,6 +1341,31 @@ struct TripPhotoPickerView: View {
                     Text("No photos found for this trip's dates.")
                         .foregroundColor(.gray)
                         .padding()
+                } else if isAddingPhotos {
+                    // Show loading state when adding photos
+                    VStack(spacing: 20) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        
+                        Text("Adding Photos...")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                        
+                        Text("\(addingProgress) of \(totalPhotosToAdd) photos processed")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        ProgressView(value: Double(addingProgress), total: Double(totalPhotosToAdd))
+                            .progressViewStyle(LinearProgressViewStyle())
+                            .frame(width: 200)
+                        
+                        Text("This may take a while for large photos or iCloud photos")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) {
@@ -1152,11 +1397,22 @@ struct TripPhotoPickerView: View {
                         dismiss()
                     }
                 }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Add (\(selectedPhotos.count))") {
-                        addSelectedPhotos()
+                    HStack(spacing: 16) {
+                        // Select All button - only show if there are photos to select
+                        if !photos.isEmpty {
+                            Button("Select All") {
+                                selectAllAvailablePhotos()
+                            }
+                            .disabled(selectedPhotos.count == getAvailablePhotosCount())
+                        }
+                        
+                        Button("Add (\(selectedPhotos.count))") {
+                            addSelectedPhotos()
+                        }
+                        .disabled(selectedPhotos.isEmpty)
                     }
-                    .disabled(selectedPhotos.isEmpty)
                 }
             }
             .onAppear(perform: loadPhotos)
@@ -1243,18 +1499,48 @@ struct TripPhotoPickerView: View {
         return false
     }
     
+    private func getAvailablePhotosCount() -> Int {
+        // Count photos that aren't already added
+        return photos.filter { !isPhotoAlreadyAdded($0) }.count
+    }
+    
+    private func selectAllAvailablePhotos() {
+        // Use the existing photos array which already has the correct date range
+        let availablePhotos = photos.filter { !isPhotoAlreadyAdded($0) }
+        
+        // Clear current selection and add all available photos
+        selectedPhotos = availablePhotos
+        
+        print("TripPhotoPickerView: Selected all \(availablePhotos.count) available photos for trip dates")
+    }
+    
     private func addSelectedPhotos() {
         guard !selectedPhotos.isEmpty else { return }
+        
+        // Set up loading state
+        isAddingPhotos = true
+        addingProgress = 0
+        totalPhotosToAdd = selectedPhotos.count
         
         Task {
             var results: [PhotoProcessingResult] = []
             
-            for asset in selectedPhotos {
+            for (index, asset) in selectedPhotos.enumerated() {
                 let result = await processPhotoAsset(asset)
                 results.append(result)
+                
+                // Update progress
+                await MainActor.run {
+                    addingProgress = index + 1
+                }
             }
             
             await MainActor.run {
+                // Reset loading state and dismiss
+                isAddingPhotos = false
+                addingProgress = 0
+                totalPhotosToAdd = 0
+                
                 // Show results and dismiss
                 dismiss()
                 NotificationCenter.default.post(name: .photosAddedToTripDay, object: nil)
@@ -1333,7 +1619,7 @@ struct TripPhotoPickerView: View {
                 imageOptions.isNetworkAccessAllowed = true
                 imageOptions.isSynchronous = false
                 
-                await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+                let imageData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
                     PHImageManager.default().requestImage(
                         for: asset,
                         targetSize: PHImageManagerMaximumSize,
@@ -1348,6 +1634,9 @@ struct TripPhotoPickerView: View {
                         }
                     }
                 }
+                
+                // Save the image data to file
+                try imageData.write(to: fileURL)
             }
             
             try viewContext.save()
@@ -1405,9 +1694,9 @@ struct TripPhotoAssetView: View {
                     .clipped()
                     .cornerRadius(8)
                     .overlay(
-                        // Gray overlay for disabled photos
+                        // Light overlay for disabled photos (already added)
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(isDisabled ? Color.black.opacity(0.6) : Color.clear)
+                            .fill(isDisabled ? Color.white.opacity(0.7) : Color.clear)
                     )
             } else if hasError {
                 // Show error state
@@ -1435,22 +1724,8 @@ struct TripPhotoAssetView: View {
                     )
             }
             
-            // Checkmark indicators - prioritize disabled state over selection
-            if isDisabled {
-                // Already added indicator (green checkmark)
-                VStack {
-                    HStack {
-                        Spacer()
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.white)
-                            .background(Color.green)
-                            .clipShape(Circle())
-                            .font(.title2)
-                    }
-                    Spacer()
-                }
-                    .padding(4)
-            } else if isSelected {
+            // Checkmark indicators - only show for selection, not for disabled photos
+            if isSelected {
                 // Selection indicator (blue checkmark) - only show if not disabled
                 VStack {
                     HStack {
@@ -1464,7 +1739,7 @@ struct TripPhotoAssetView: View {
                     Spacer()
                 }
                     .padding(4)
-            } else {
+            } else if !isDisabled {
                 // Plus symbol for selectable photos (not disabled, not selected)
                 VStack {
                     HStack {
@@ -1479,6 +1754,7 @@ struct TripPhotoAssetView: View {
                 }
                     .padding(4)
             }
+            // No indicator for disabled photos - they're already dark enough
         }
         .onTapGesture(perform: onTap)
         .onAppear {
@@ -1585,7 +1861,7 @@ struct PhotosGrid: View {
             GridItem(.flexible())
         ], spacing: 12) {
             ForEach(photos.sorted { $0.order < $1.order }) { photo in
-                TripPhotoThumbnailView(photo: photo)
+                TripPhotoThumbnailView(photo: photo, onPhotoDeleted: {})
                     .frame(width: 100, height: 100)
                     .clipped()
                     .cornerRadius(8)

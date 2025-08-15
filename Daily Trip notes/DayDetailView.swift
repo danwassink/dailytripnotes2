@@ -7,6 +7,101 @@ import AVFoundation
 import AVKit
 import Foundation
 
+// MARK: - Unified Photo Loading Utility
+class PhotoLoader: ObservableObject {
+    static let shared = PhotoLoader()
+    
+    private init() {}
+    
+    // Unified photo loading function that works consistently across all views
+    func loadPhoto(
+        filename: String?,
+        assetIdentifier: String?,
+        mediaType: String?,
+        completion: @escaping (UIImage?, Bool, Bool) -> Void
+    ) {
+        guard let filename = filename else {
+            completion(nil, false, true) // No filename, show error
+            return
+        }
+        
+        // FIRST PRIORITY: Try loading from documents directory (most reliable for saved photos)
+        if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let fileURL = documentsPath.appendingPathComponent(filename)
+            
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                do {
+                    let imageData = try Data(contentsOf: fileURL)
+                    if let loadedImage = UIImage(data: imageData) {
+                        completion(loadedImage, false, false) // Success, not loading, no error
+                        return
+                    }
+                } catch {
+                    print("PhotoLoader: Failed to read file data: \(error)")
+                }
+            }
+        }
+        
+        // SECOND PRIORITY: Try loading from PHAsset if available
+        if let assetIdentifier = assetIdentifier {
+            loadPhotoFromPHAsset(assetIdentifier) { image, hasError in
+                completion(image, false, hasError)
+            }
+            return
+        }
+        
+        // THIRD PRIORITY: Check if filename contains asset identifier (old format)
+        if filename.hasPrefix("temp_") {
+            let assetIdentifier = String(filename.dropFirst(5))
+            loadPhotoFromPHAsset(assetIdentifier) { image, hasError in
+                completion(image, false, hasError)
+            }
+            return
+        }
+        
+        // FOURTH PRIORITY: Try to extract asset identifier from filename
+        if filename.contains(":") {
+            loadPhotoFromPHAsset(filename) { image, hasError in
+                completion(image, false, hasError)
+            }
+            return
+        }
+        
+        // No more attempts, show error
+        completion(nil, false, true)
+    }
+    
+    private func loadPhotoFromPHAsset(_ assetIdentifier: String, completion: @escaping (UIImage?, Bool) -> Void) {
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+        guard let asset = fetchResult.firstObject else {
+            completion(nil, true)
+            return
+        }
+        
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.isNetworkAccessAllowed = true
+        options.resizeMode = .fast
+        
+        let targetSize = CGSize(width: 200, height: 200) // 2x for retina
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: .aspectFill,
+            options: options
+        ) { image, info in
+            DispatchQueue.main.async {
+                if let image = image {
+                    completion(image, false)
+                } else {
+                    completion(nil, true)
+                }
+            }
+        }
+    }
+}
+
 struct DayDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
@@ -54,60 +149,60 @@ struct DayDetailView: View {
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Header with date - redesigned without gray background
-            VStack(spacing: 12) {
-                if let date = tripDay.date {
-                    // Main date in large, prominent text (without day to avoid duplication)
-                    Text(date.formatted(.dateTime.month(.wide).day().year()))
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                        .multilineTextAlignment(.center)
-                    
-                    // Day of week in blue, medium size
-                    Text(date.formatted(.dateTime.weekday(.wide)))
-                        .font(.title2)
-                        .foregroundColor(.blue)
-                        .fontWeight(.semibold)
-                    
-                    // Day number with subtle styling
-                    Text("Day \(tripDay.order + 1)")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color(.systemGray6))
-                        )
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
-            .padding(.bottom, 24)
-            
-            // Media Section
-            Section("Media") {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
-                    ForEach(sortedPhotos, id: \.id) { photo in
-                        PhotoThumbnailView(photo: photo, onPhotoDeleted: {
-                            photosDeleted.toggle() // Force refresh when photo is deleted
-                        })
+        ScrollView {
+            VStack(spacing: 0) {
+                // Header with date - redesigned without gray background
+                VStack(spacing: 12) {
+                    if let date = tripDay.date {
+                        // Main date in large, prominent text (without day to avoid duplication)
+                        Text(date.formatted(.dateTime.month(.wide).day().year()))
+                            .font(.largeTitle)
+                            .fontWeight(.bold)
+                            .multilineTextAlignment(.center)
+                        
+                        // Day of week in blue, medium size
+                        Text(date.formatted(.dateTime.weekday(.wide)))
+                            .font(.title2)
+                            .foregroundColor(.blue)
+                            .fontWeight(.semibold)
+                        
+                        // Day number with subtle styling
+                        Text("Day \(tripDay.order + 1)")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(Color(.systemGray6))
+                            )
                     }
                 }
                 .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-            }
-            .id("\(photosAdded)-\(photosDeleted)") // Force refresh when photos are added or deleted
-            
-            // Journal entry section
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Journal Entry")
-                    .font(.headline)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 24)
                 
-                ScrollView {
+                // Media Section
+                Section("Media") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
+                        ForEach(sortedPhotos, id: \.id) { photo in
+                            PhotoThumbnailView(photo: photo, onPhotoDeleted: {
+                                photosDeleted.toggle() // Force refresh when photo is deleted
+                            })
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                }
+                .id("\(photosAdded)-\(photosDeleted)") // Force refresh when photos are added or deleted
+                
+                // Journal entry section
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Journal Entry")
+                        .font(.headline)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 20)
+                    
                     if journalContent.isEmpty {
                         Text("No journal entry yet. Tap Add to write about your day.")
                             .foregroundColor(.secondary)
@@ -121,10 +216,10 @@ struct DayDetailView: View {
                             .padding(.vertical, 16)
                     }
                 }
-                .frame(maxHeight: .infinity)
+                
+                // Add bottom padding to ensure content isn't hidden behind FABs
+                Spacer(minLength: 120)
             }
-            
-            Spacer()
         }
         .navigationTitle("Day Details")
         .navigationBarTitleDisplayMode(.inline)
@@ -217,11 +312,14 @@ struct DayDetailView: View {
     
     private func processSelectedPHAssets(_ assets: [PHAsset]) {
         print("DayDetailView: Processing \(assets.count) selected PHAssets")
+        print("DayDetailView: Assets: \(assets.map { "\($0.localIdentifier) (\($0.mediaType == .video ? "video" : "photo"))" })")
         isProcessing = true
         
         Task {
             for (index, asset) in assets.enumerated() {
-                print("DayDetailView: Processing PHAsset \(index + 1) of \(assets.count)")
+                print("DayDetailView: Processing PHAsset \(index + 1) of \(assets.count): \(asset.localIdentifier)")
+                print("DayDetailView: Asset media type: \(asset.mediaType.rawValue)")
+                print("DayDetailView: Asset creation date: \(asset.creationDate?.description ?? "nil")")
                 
                 let data = await loadMediaDataFromAsset(asset)
                 if let data = data {
@@ -231,7 +329,7 @@ struct DayDetailView: View {
                         saveMedia(data: data, order: index, mediaType: mediaType, asset: asset)
                     }
                 } else {
-                    print("DayDetailView: Failed to load PHAsset data for asset \(index + 1)")
+                    print("DayDetailView: Failed to load PHAsset data for asset \(index + 1): \(asset.localIdentifier)")
                 }
             }
             
@@ -244,37 +342,70 @@ struct DayDetailView: View {
     }
     
     private func loadMediaDataFromAsset(_ asset: PHAsset) async -> Data? {
+        print("DayDetailView: Starting to load media data for asset: \(asset.localIdentifier)")
+        
+        if asset.mediaType == PHAssetMediaType.video {
+            print("DayDetailView: Loading video data...")
+            return await loadVideoDataFromAsset(asset)
+        } else {
+            print("DayDetailView: Loading photo data...")
+            return await loadPhotoDataFromAsset(asset)
+        }
+    }
+    
+    private func loadVideoDataFromAsset(_ asset: PHAsset) async -> Data? {
+        let options = PHVideoRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = false
+        options.version = .current
+        
         return await withCheckedContinuation { continuation in
-            if asset.mediaType == PHAssetMediaType.video {
-                // For videos, use PHVideoRequestOptions
-                let options = PHVideoRequestOptions()
-                options.deliveryMode = .highQualityFormat
-                options.isNetworkAccessAllowed = false
-                options.version = .current
+            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, error in
+                if let error = error {
+                    print("DayDetailView: Video request error: \(error)")
+                    continuation.resume(returning: nil)
+                    return
+                }
                 
-                PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
-                    if let avAsset = avAsset as? AVURLAsset {
-                        // Read the video file data
-                        do {
-                            let data = try Data(contentsOf: avAsset.url)
-                            continuation.resume(returning: data)
-                        } catch {
-                            print("DayDetailView: Failed to read video data: \(error)")
-                            continuation.resume(returning: nil)
-                        }
-                    } else {
+                if let avAsset = avAsset as? AVURLAsset {
+                    print("DayDetailView: Got AVAsset for video, reading data...")
+                    do {
+                        let data = try Data(contentsOf: avAsset.url)
+                        print("DayDetailView: Successfully read video data: \(data.count) bytes")
+                        continuation.resume(returning: data)
+                    } catch {
+                        print("DayDetailView: Failed to read video data: \(error)")
                         continuation.resume(returning: nil)
                     }
+                } else {
+                    print("DayDetailView: Failed to get AVAsset for video")
+                    continuation.resume(returning: nil)
+                    return
                 }
-            } else {
-                // For photos, use PHImageRequestOptions
-                let options = PHImageRequestOptions()
-                options.deliveryMode = .highQualityFormat
-                options.isNetworkAccessAllowed = false
-                options.isSynchronous = false
+            }
+        }
+    }
+    
+    private func loadPhotoDataFromAsset(_ asset: PHAsset) async -> Data? {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = false
+        options.isSynchronous = false
+        
+        return await withCheckedContinuation { continuation in
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, dataUTI, orientation, info in
+                if let error = info?[PHImageErrorKey] as? Error {
+                    print("DayDetailView: Photo request error: \(error)")
+                    continuation.resume(returning: nil)
+                    return
+                }
                 
-                PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
+                if let data = data {
+                    print("DayDetailView: Successfully got photo data: \(data.count) bytes")
                     continuation.resume(returning: data)
+                } else {
+                    print("DayDetailView: No photo data received")
+                    continuation.resume(returning: nil)
                 }
             }
         }
@@ -335,7 +466,25 @@ struct DayDetailView: View {
         // Save the media file to documents directory
         if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             let mediaURL = documentsPath.appendingPathComponent(photo.filename!)
-            try? data.write(to: mediaURL)
+            print("DayDetailView: Attempting to save \(mediaType) to: \(mediaURL.path)")
+            
+            do {
+                try data.write(to: mediaURL)
+                print("DayDetailView: Successfully saved \(mediaType) data to file")
+                
+                // Verify the file was actually saved
+                let fileManager = FileManager.default
+                if fileManager.fileExists(atPath: mediaURL.path) {
+                    let fileSize = try fileManager.attributesOfItem(atPath: mediaURL.path)[.size] as? Int64 ?? 0
+                    print("DayDetailView: File exists at path, size: \(fileSize) bytes")
+                } else {
+                    print("DayDetailView: ERROR - File does not exist after saving!")
+                }
+            } catch {
+                print("DayDetailView: ERROR - Failed to save \(mediaType) data: \(error)")
+            }
+        } else {
+            print("DayDetailView: ERROR - Could not get documents directory path")
         }
         
         // Save to Core Data
@@ -362,6 +511,9 @@ struct PhotoThumbnailView: View {
     @State private var image: UIImage?
     @State private var showingDeleteAlert = false
     @State private var showingVideoPlayer = false
+    @State private var showingFullScreenPhoto = false
+    @State private var isLoading = true
+    @State private var hasError = false
     @Environment(\.managedObjectContext) private var viewContext
     
     var body: some View {
@@ -373,13 +525,46 @@ struct PhotoThumbnailView: View {
                     .frame(width: 100, height: 100)
                     .clipped()
                     .cornerRadius(8)
-            } else {
+            } else if hasError {
+                // Show error state with retry button
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemRed).opacity(0.3))
+                    .frame(width: 100, height: 100)
+                    .overlay(
+                        VStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundColor(.red)
+                                .font(.caption)
+                            Text("Error")
+                                .font(.caption2)
+                                .foregroundColor(.red)
+                            Button("Retry") {
+                                Task {
+                                    await loadPhoto()
+                                }
+                            }
+                            .font(.caption2)
+                            .foregroundColor(.blue)
+                        }
+                    )
+            } else if isLoading {
+                // Show loading state
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(.systemGray5))
                     .frame(width: 100, height: 100)
                     .overlay(
                         ProgressView()
                             .scaleEffect(0.8)
+                    )
+            } else {
+                // Show placeholder when not loading and no image
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray5))
+                    .frame(width: 100, height: 100)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.secondary)
+                            .font(.title2)
                     )
             }
             
@@ -418,6 +603,8 @@ struct PhotoThumbnailView: View {
         .onTapGesture {
             if photo.mediaType == "video" {
                 showingVideoPlayer = true
+            } else {
+                showingFullScreenPhoto = true
             }
         }
         .onLongPressGesture {
@@ -436,104 +623,196 @@ struct PhotoThumbnailView: View {
                 VideoPlayerView(filename: filename)
             }
         }
+        .sheet(isPresented: $showingFullScreenPhoto) {
+            // Get the photos from the parent view context for navigation
+            if let tripDay = photo.tripDay,
+               let trip = tripDay.trip {
+                let allPhotos = trip.tripDays?.compactMap { $0 as? TripDay }
+                    .flatMap { $0.photos?.compactMap { $0 as? Photo } ?? [] } ?? []
+                if let currentIndex = allPhotos.firstIndex(of: photo) {
+                    FullScreenPhotoView(photos: allPhotos, currentIndex: currentIndex, onPhotoDeleted: {
+                        onPhotoDeleted() // Notify parent view when photo is deleted
+                    })
+                } else {
+                    FullScreenPhotoView(photo: photo, onPhotoDeleted: {
+                        onPhotoDeleted() // Notify parent view when photo is deleted
+                    })
+                }
+            } else {
+                FullScreenPhotoView(photo: photo, onPhotoDeleted: {
+                    onPhotoDeleted() // Notify parent view when photo is deleted
+                })
+            }
+        }
         .task {
             await loadPhoto()
         }
     }
     
     private func loadPhoto() async {
-        guard let filename = photo.filename else { return }
+        guard let filename = photo.filename else { 
+            DispatchQueue.main.async {
+                self.isLoading = false
+                self.hasError = true
+            }
+            return 
+        }
         
         // Handle videos differently - generate thumbnail
         if photo.mediaType == "video" {
             await generateVideoThumbnail(filename: filename)
         } else {
-            // First try to load from assetIdentifier if available
-            if let assetIdentifier = photo.assetIdentifier {
-                await loadPhotoFromPHAsset(assetIdentifier)
-                return
-            }
-            
-            // Check if this is a temporary photo from PHAsset (old format)
-            if filename.hasPrefix("temp_") {
-                let assetIdentifier = String(filename.dropFirst(5)) // Remove "temp_" prefix
-                await loadPhotoFromPHAsset(assetIdentifier)
-                return
-            }
-            
-            // Try loading from documents directory
-            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-            let fileURL = documentsPath?.appendingPathComponent(filename)
-            
-            if let fileURL = fileURL,
-               let imageData = try? Data(contentsOf: fileURL),
-               let loadedImage = UIImage(data: imageData) {
-                await MainActor.run {
-                    self.image = loadedImage
-                }
-            } else {
-                // Try to extract asset identifier from filename if it contains one
-                if filename.contains(":") {
-                    let assetIdentifier = filename
-                    await loadPhotoFromPHAsset(assetIdentifier)
-                }
-            }
-        }
-    }
-    
-    private func loadPhotoFromPHAsset(_ assetIdentifier: String) async {
-        // Fetch the PHAsset
-        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
-        guard let asset = fetchResult.firstObject else { return }
-        
-        // Try multiple approaches to load the image
-        await loadPhotoWithMultipleAttempts(asset: asset)
-    }
-    
-    private func loadPhotoWithMultipleAttempts(asset: PHAsset) async {
-        // Attempt 1: Fast thumbnail with opportunistic delivery
-        let fastOptions = PHImageRequestOptions()
-        fastOptions.deliveryMode = .opportunistic
-        fastOptions.isNetworkAccessAllowed = true
-        fastOptions.resizeMode = .fast
-        
-        let targetSize = CGSize(width: 100, height: 100) // 2x for retina
-        
-        await withCheckedContinuation { continuation in
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: targetSize,
-                contentMode: .aspectFill,
-                options: fastOptions
-            ) { image, info in
-                if let image = image {
-                    Task { @MainActor in
-                        self.image = image
-                    }
-                    continuation.resume(returning: ())
-                } else {
-                    continuation.resume(returning: ())
+            // Use the unified PhotoLoader
+            PhotoLoader.shared.loadPhoto(
+                filename: filename,
+                assetIdentifier: photo.assetIdentifier,
+                mediaType: photo.mediaType
+            ) { image, isLoading, hasError in
+                DispatchQueue.main.async {
+                    self.image = image
+                    self.isLoading = isLoading
+                    self.hasError = hasError
                 }
             }
         }
     }
     
     private func generateVideoThumbnail(filename: String) async {
-        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { 
+            DispatchQueue.main.async {
+                self.isLoading = false
+                self.hasError = true
+            }
+            return 
+        }
         let videoURL = documentsPath.appendingPathComponent(filename)
         
-        let asset = AVAsset(url: videoURL)
-        let imageGenerator = AVAssetImageGenerator(asset: asset)
-        imageGenerator.appliesPreferredTrackTransform = true
-        
+        // First try: Use AVAssetImageGenerator with more flexible options
         do {
+            let asset = AVAsset(url: videoURL)
+            let imageGenerator = AVAssetImageGenerator(asset: asset)
+            imageGenerator.appliesPreferredTrackTransform = true
+            imageGenerator.maximumSize = CGSize(width: 200, height: 200)
+            
+            // Try to generate thumbnail at the beginning
             let result = try await imageGenerator.image(at: .zero)
-            await MainActor.run {
+            DispatchQueue.main.async {
                 self.image = UIImage(cgImage: result.image)
+                self.isLoading = false
+                self.hasError = false
             }
+            return
         } catch {
-            print("Failed to generate video thumbnail: \(error)")
+            print("AVAssetImageGenerator failed: \(error)")
         }
+        
+        // Second try: Try with PHAsset if we have an asset identifier
+        if let assetIdentifier = photo.assetIdentifier {
+            await generateThumbnailFromPHAsset(assetIdentifier)
+            return
+        }
+        
+        // Third try: Try to extract thumbnail using AVAsset with different approach
+        do {
+            let asset = AVAsset(url: videoURL)
+            let imageGenerator = AVAssetImageGenerator(asset: asset)
+            imageGenerator.appliesPreferredTrackTransform = true
+            imageGenerator.maximumSize = CGSize(width: 100, height: 100)
+            
+            // Try to get a frame from a different time position
+            let duration = try await asset.load(.duration)
+            let timePosition = CMTime(seconds: min(duration.seconds / 2, 1.0), preferredTimescale: 600)
+            
+            let result = try await imageGenerator.image(at: timePosition)
+            DispatchQueue.main.async {
+                self.image = UIImage(cgImage: result.image)
+                self.isLoading = false
+                self.hasError = false
+            }
+            return
+        } catch {
+            print("Second AVAssetImageGenerator attempt failed: \(error)")
+        }
+        
+        // Final fallback: Show a video placeholder
+        DispatchQueue.main.async {
+            self.isLoading = false
+            self.hasError = false
+            // Create a simple video placeholder image
+            self.createVideoPlaceholder()
+        }
+    }
+    
+    private func generateThumbnailFromPHAsset(_ assetIdentifier: String) async {
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+        guard let asset = fetchResult.firstObject else {
+            await MainActor.run {
+                self.isLoading = false
+                self.hasError = true
+            }
+            return
+        }
+        
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.isNetworkAccessAllowed = true
+        options.resizeMode = .fast
+        
+        let targetSize = CGSize(width: 200, height: 200)
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: .aspectFill,
+            options: options
+        ) { image, info in
+            Task { @MainActor in
+                if let image = image {
+                    self.image = image
+                    self.isLoading = false
+                    self.hasError = false
+                } else {
+                    self.isLoading = false
+                    self.hasError = true
+                }
+            }
+        }
+    }
+    
+    private func createVideoPlaceholder() {
+        // Create a simple video placeholder with play button
+        let size = CGSize(width: 100, height: 100)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        
+        let placeholderImage = renderer.image { context in
+            // Background
+            UIColor.systemGray5.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            
+            // Play button
+            let playButtonSize: CGFloat = 40
+            let playButtonRect = CGRect(
+                x: (size.width - playButtonSize) / 2,
+                y: (size.height - playButtonSize) / 2,
+                width: playButtonSize,
+                height: playButtonSize
+            )
+            
+            UIColor.blue.setFill()
+            context.cgContext.fillEllipse(in: playButtonRect)
+            
+            // Play triangle
+            let trianglePath = UIBezierPath()
+            trianglePath.move(to: CGPoint(x: playButtonRect.midX + 8, y: playButtonRect.midY))
+            trianglePath.addLine(to: CGPoint(x: playButtonRect.midX - 8, y: playButtonRect.midY - 8))
+            trianglePath.addLine(to: CGPoint(x: playButtonRect.midX - 8, y: playButtonRect.midY + 8))
+            trianglePath.close()
+            
+            UIColor.white.setFill()
+            trianglePath.fill()
+        }
+        
+        self.image = placeholderImage
     }
     
     private func deletePhoto() {
@@ -554,6 +833,8 @@ struct PhotoThumbnailView: View {
         try? viewContext.save()
         onPhotoDeleted() // Notify parent view
     }
+    
+
 }
 
 struct CustomPhotoPickerView: View {
@@ -627,11 +908,21 @@ struct CustomPhotoPickerView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Add \(selectedPhotos.count) Media") {
-                        onPhotosSelected(selectedPhotos)
-                        dismiss()
+                    HStack(spacing: 16) {
+                        // Select All button - only show if there are photos to select
+                        if !photos.isEmpty {
+                            Button("Select All") {
+                                selectAllAvailablePhotos()
+                            }
+                            .disabled(selectedPhotos.count == getAvailablePhotosCount())
+                        }
+                        
+                        Button("Add \(selectedPhotos.count) Media") {
+                            onPhotosSelected(selectedPhotos)
+                            dismiss()
+                        }
+                        .disabled(selectedPhotos.isEmpty)
                     }
-                    .disabled(selectedPhotos.isEmpty)
                 }
             }
         }
@@ -763,6 +1054,21 @@ struct CustomPhotoPickerView: View {
         formatter.dateStyle = .medium
         return formatter.string(from: date)
     }
+
+    private func getAvailablePhotosCount() -> Int {
+        // Count photos that aren't already added
+        return photos.filter { !isPhotoAlreadyAdded($0) }.count
+    }
+
+    private func selectAllAvailablePhotos() {
+        // Use the existing photos array which already has duplicates filtered out
+        let availablePhotos = photos.filter { !isPhotoAlreadyAdded($0) }
+        
+        // Clear current selection and add all available photos
+        selectedPhotos = availablePhotos
+        
+        print("CustomPhotoPickerView: Selected all \(availablePhotos.count) available photos for date \(tripDay.date ?? Date())")
+    }
 }
 
 struct PhotoAssetView: View {
@@ -774,6 +1080,9 @@ struct PhotoAssetView: View {
     @State private var image: UIImage?
     @State private var isLoading = true
     @State private var hasError = false
+    
+    // Static semaphore to limit concurrent photo loading
+    private static let photoLoadingSemaphore = DispatchSemaphore(value: 5)
     
     var body: some View {
         ZStack {
@@ -872,6 +1181,19 @@ struct PhotoAssetView: View {
     }
     
     private func loadThumbnail() async {
+        // Wait for semaphore to prevent too many concurrent photo loads
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                Self.photoLoadingSemaphore.wait()
+                continuation.resume()
+            }
+        }
+        
+        defer {
+            // Always signal the semaphore when done
+            Self.photoLoadingSemaphore.signal()
+        }
+        
         let options = PHImageRequestOptions()
         options.deliveryMode = .opportunistic
         options.isNetworkAccessAllowed = true
@@ -880,12 +1202,19 @@ struct PhotoAssetView: View {
         // Try to load a smaller thumbnail first
         let targetSize = CGSize(width: 100, height: 100)
         
+        // Use a flag to prevent multiple callback handling
+        var hasHandledCallback = false
+        
         PHImageManager.default().requestImage(
             for: asset,
             targetSize: targetSize,
             contentMode: .aspectFill,
             options: options
         ) { image, info in
+            // Prevent multiple callback handling
+            guard !hasHandledCallback else { return }
+            hasHandledCallback = true
+            
             DispatchQueue.main.async {
                 if let image = image {
                     self.image = image
@@ -907,40 +1236,62 @@ struct PhotoAssetView: View {
     }
     
     private func loadFullImage() {
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .highQualityFormat
-        options.isNetworkAccessAllowed = true
-        options.isSynchronous = false
-        
-        PHImageManager.default().requestImage(
-            for: asset,
-            targetSize: PHImageManagerMaximumSize,
-            contentMode: .aspectFit,
-            options: options
-        ) { image, info in
-            DispatchQueue.main.async {
-                if let image = image {
-                    // Scale down the full image to thumbnail size
-                    let thumbnailSize = CGSize(width: 100, height: 100)
-                    UIGraphicsBeginImageContextWithOptions(thumbnailSize, false, 0.0)
-                    image.draw(in: CGRect(origin: .zero, size: thumbnailSize))
-                    let thumbnail = UIGraphicsGetImageFromCurrentImageContext()
-                    UIGraphicsEndImageContext()
-                    
-                    self.image = thumbnail
-                    self.isLoading = false
-                    self.hasError = false
-                } else {
-                    // Check if there's an error
-                    if let error = info?[PHImageErrorKey] as? Error {
-                        print("PhotoAssetView: Full image loading error: \(error.localizedDescription)")
-                        self.hasError = true
+        // Wait for semaphore to prevent too many concurrent photo loads
+        Task {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    Self.photoLoadingSemaphore.wait()
+                    continuation.resume()
+                }
+            }
+            
+            defer {
+                // Always signal the semaphore when done
+                Self.photoLoadingSemaphore.signal()
+            }
+            
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = true
+            options.isSynchronous = false
+            
+            // Use a flag to prevent multiple callback handling
+            var hasHandledCallback = false
+            
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: PHImageManagerMaximumSize,
+                contentMode: .aspectFit,
+                options: options
+            ) { image, info in
+                // Prevent multiple callback handling
+                guard !hasHandledCallback else { return }
+                hasHandledCallback = true
+                
+                DispatchQueue.main.async {
+                    if let image = image {
+                        // Scale down the full image to thumbnail size
+                        let thumbnailSize = CGSize(width: 100, height: 100)
+                        UIGraphicsBeginImageContextWithOptions(thumbnailSize, false, 0.0)
+                        image.draw(in: CGRect(origin: .zero, size: thumbnailSize))
+                        let thumbnail = UIGraphicsGetImageFromCurrentImageContext()
+                        UIGraphicsEndImageContext()
+                        
+                        self.image = thumbnail
                         self.isLoading = false
+                        self.hasError = false
                     } else {
-                        // If all else fails, show error state
-                        print("PhotoAssetView: Failed to load image for asset: \(self.asset.localIdentifier)")
-                        self.hasError = true
-                        self.isLoading = false
+                        // Check if there's an error
+                        if let error = info?[PHImageErrorKey] as? Error {
+                            print("PhotoAssetView: Full image loading error: \(error.localizedDescription)")
+                            self.hasError = true
+                            self.isLoading = false
+                        } else {
+                            // If all else fails, show error state
+                            print("PhotoAssetView: Failed to load image for asset: \(self.asset.localIdentifier)")
+                            self.hasError = true
+                            self.isLoading = false
+                        }
                     }
                 }
             }
@@ -993,6 +1344,10 @@ struct VideoPlayerView: View {
         }
     }
 }
+
+
+
+
 
 
 
